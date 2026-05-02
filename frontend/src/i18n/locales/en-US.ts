@@ -1772,6 +1772,13 @@ export default {
       issueFixPromptSingle: 'Please fix the issue (ID: {id}) on page [[{slug}]].',
       issueFixPromptAutoStart: 'Please fix the following issues on page [[{slug}]]:',
       issueFixPromptAutoEnd: '',
+      structuralFix: 'Structural Fix',
+      structuralFixTooltip: 'Scan and auto-fix orphan pages, stale references, broken links',
+      structuralFixConfirmTitle: 'Run wiki structural fix?',
+      structuralFixConfirmBody: 'Will archive entity/concept pages whose source_refs are empty, strip references to deleted documents, and repair broken links. Index/log and other global pages are not affected.',
+      structuralFixDone: 'Fixed {count} structural issue(s)',
+      structuralFixNothing: 'Wiki is clean — no structural issues found',
+      structuralFixFailed: 'Structural fix failed',
     },
     buttons: {
       create: 'Create Knowledge Base',

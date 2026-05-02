@@ -2355,6 +2355,13 @@ export default {
       issueFixPromptSingle: "请修复页面 [[{slug}]] 上的问题 (ID: {id})。",
       issueFixPromptAutoStart: "请修复页面 [[{slug}]] 上的以下问题：",
       issueFixPromptAutoEnd: "",
+      structuralFix: "结构修复",
+      structuralFixTooltip: "扫描并自动修复孤儿页面、失效引用、断链等结构问题",
+      structuralFixConfirmTitle: "运行 wiki 结构修复？",
+      structuralFixConfirmBody: "将自动归档 source_refs 已空的 entity/concept 页面、剥离指向已删除文档的引用、修复指向不存在页面的链接。index/log 等全局页不受影响。",
+      structuralFixDone: "已修复 {count} 个结构问题",
+      structuralFixNothing: "wiki 结构是干净的，未发现需要修复的问题",
+      structuralFixFailed: "结构修复失败",
     },
     buttons: {
       create: "创建知识库",

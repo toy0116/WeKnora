@@ -217,6 +217,19 @@
           >
             <template #prefixIcon><t-icon name="search" /></template>
           </t-input>
+          <!-- Structural maintenance: archive orphans / strip stale refs / repair broken links -->
+          <t-tooltip :content="$t('knowledgeEditor.wikiBrowser.structuralFixTooltip')" placement="bottom">
+            <t-button
+              size="small"
+              variant="outline"
+              :loading="structuralFixRunning"
+              @click="runStructuralFix"
+              class="wiki-structural-fix-btn"
+            >
+              <template #icon><t-icon name="tools" /></template>
+              {{ $t('knowledgeEditor.wikiBrowser.structuralFix') }}
+            </t-button>
+          </t-tooltip>
         </div>
 
         <div class="wiki-page-list" ref="pageListRef">
@@ -630,7 +643,7 @@ import { useMenuStore } from '@/stores/menu'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next'
 // RecycleScroller virtualizes the sidebar page lists so expanding a
 // 40k-item group no longer commits 40k DOM nodes. Each item has a fixed
 // height (title + 2-line summary + meta + padding) which keeps recycle
@@ -650,6 +663,7 @@ import {
   searchWikiPages,
   listWikiIssues,
   updateWikiIssueStatus,
+  autoFixWiki,
   type WikiPage,
   type WikiGraphData,
   type WikiStats,
@@ -2391,12 +2405,51 @@ function triggerFixIssue(issue: WikiPageIssue) {
 function triggerAutoFix() {
   if (!selectedPage.value || pageIssues.value.length === 0) return
   let prompt = t('knowledgeEditor.wikiBrowser.issueFixPromptAutoStart', { slug: selectedPage.value.slug }) + '\n\n'
-  
+
   pageIssues.value.forEach((issue, idx) => {
     prompt += `${idx + 1}. Issue ID: ${issue.id}\n`
   })
-  
+
   startFixSession(prompt)
+}
+
+// Structural maintenance — runs the backend's wiki/auto-fix endpoint to:
+//   - archive orphan_page (entity/concept whose source_refs are empty)
+//   - strip stale_ref (refs to soft-deleted knowledge); delete page if it
+//     was the only ref
+//   - repair broken_link
+// index/log and other global pages are skipped server-side.
+const structuralFixRunning = ref(false)
+
+async function runStructuralFix() {
+  const dialog = DialogPlugin.confirm({
+    header: t('knowledgeEditor.wikiBrowser.structuralFixConfirmTitle'),
+    body: t('knowledgeEditor.wikiBrowser.structuralFixConfirmBody'),
+    confirmBtn: t('knowledgeEditor.wikiBrowser.structuralFix'),
+    cancelBtn: t('common.cancel'),
+    onConfirm: async () => {
+      structuralFixRunning.value = true
+      try {
+        const res = (await autoFixWiki(props.knowledgeBaseId)) as any
+        const fixed = (res?.data?.fixed ?? res?.fixed ?? 0) as number
+        if (fixed > 0) {
+          MessagePlugin.success(t('knowledgeEditor.wikiBrowser.structuralFixDone', { count: fixed }))
+          // Refresh sidebar pages + stats so the user sees the result.
+          await loadStats()
+          await loadPages()
+          await loadGraph()
+        } else {
+          MessagePlugin.info(t('knowledgeEditor.wikiBrowser.structuralFixNothing'))
+        }
+        dialog.hide()
+      } catch (e: any) {
+        const msg = e?.message || e?.error || t('knowledgeEditor.wikiBrowser.structuralFixFailed')
+        MessagePlugin.error(msg)
+      } finally {
+        structuralFixRunning.value = false
+      }
+    },
+  })
 }
 
 async function doSearch() {

@@ -1994,6 +1994,13 @@ export default {
       issueFixPromptSingle: 'Пожалуйста, исправьте проблему (ID: {id}) на странице [[{slug}]].',
       issueFixPromptAutoStart: 'Пожалуйста, исправьте следующие проблемы на странице [[{slug}]]:',
       issueFixPromptAutoEnd: '',
+      structuralFix: 'Структурное исправление',
+      structuralFixTooltip: 'Сканировать и автоматически исправлять страницы-сироты, устаревшие ссылки, битые ссылки',
+      structuralFixConfirmTitle: 'Запустить структурное исправление вики?',
+      structuralFixConfirmBody: 'Будут архивированы страницы entity/concept с пустыми source_refs, удалены ссылки на удалённые документы и восстановлены битые ссылки. Глобальные страницы (index/log) не затрагиваются.',
+      structuralFixDone: 'Исправлено {count} структурных проблем',
+      structuralFixNothing: 'Вики в порядке — структурных проблем не найдено',
+      structuralFixFailed: 'Структурное исправление не удалось',
     },
     buttons: {
       create: 'Создать базу знаний',

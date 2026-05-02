@@ -2384,6 +2384,13 @@ export default {
       issueFixPromptSingle: "페이지 [[{slug}]] 의 문제(ID: {id})를 수정해 주세요.",
       issueFixPromptAutoStart: "페이지 [[{slug}]] 의 다음 문제들을 수정해 주세요:",
       issueFixPromptAutoEnd: "",
+      structuralFix: "구조 복구",
+      structuralFixTooltip: "고아 페이지, 잘못된 참조, 깨진 링크를 스캔하고 자동 수정",
+      structuralFixConfirmTitle: "위키 구조 복구를 실행하시겠습니까?",
+      structuralFixConfirmBody: "source_refs 가 비어 있는 entity/concept 페이지를 보관 처리하고, 삭제된 문서 참조를 제거하며, 깨진 링크를 복구합니다. index/log 같은 전역 페이지는 영향을 받지 않습니다.",
+      structuralFixDone: "{count} 개의 구조 문제를 수정했습니다",
+      structuralFixNothing: "위키는 깨끗합니다 — 수정할 구조 문제가 없습니다",
+      structuralFixFailed: "구조 복구 실패",
     },
     buttons: {
       create: "지식베이스 생성",
