@@ -41,11 +41,11 @@ func NewVaultSyncHandler(
 }
 
 type VaultSyncResult struct {
-	VaultPath     string   `json:"vault_path"`
-	WikiPages     int      `json:"wiki_pages"`
-	Docs          int      `json:"docs"`
-	Images        int      `json:"images"`
-	Errors        []string `json:"errors,omitempty"`
+	VaultPath string   `json:"vault_path"`
+	WikiPages int      `json:"wiki_pages"`
+	Docs      int      `json:"docs"`
+	Images    int      `json:"images"`
+	Errors    []string `json:"errors,omitempty"`
 }
 
 // SyncToVault godoc
@@ -66,9 +66,13 @@ func (h *VaultSyncHandler) SyncToVault(c *gin.Context) {
 
 	weknoraDir := filepath.Join(vaultPath, "weknora")
 	attachDir := filepath.Join(weknoraDir, "attachments")
+
+	// summary/ is no longer written as a separate folder — summaries are merged
+	// into docs/. Clean up any leftover files from previous syncs.
+	_ = os.RemoveAll(filepath.Join(weknoraDir, "summary"))
+
 	for _, dir := range []string{
 		filepath.Join(weknoraDir, "docs"),
-		filepath.Join(weknoraDir, "summary"),
 		filepath.Join(weknoraDir, "entity"),
 		filepath.Join(weknoraDir, "concept"),
 		attachDir,
@@ -79,30 +83,51 @@ func (h *VaultSyncHandler) SyncToVault(c *gin.Context) {
 		}
 	}
 
-	// ── 1. Wiki pages ────────────────────────────────────────────────────────
+	// ── Phase 0: fetch wiki pages; build summary lookup ──────────────────────
 	pages, err := h.wikiService.ListAllPages(ctx, kbID)
 	if err != nil {
 		logger.Errorf(ctx, "vault-sync: list wiki pages: %v", err)
 		addErr("list wiki pages: " + err.Error())
 	}
+
+	// summaryEntry carries the processed summary content for one doc.
+	type summaryEntry struct {
+		slugBase string // slug without type prefix, used as Obsidian alias
+		title    string
+		content  string // wikilinks already converted
+	}
+	// Keyed by knowledge item ID parsed from SourceRefs ("knID|docTitle").
+	summaryMap := map[string]summaryEntry{}
 	for _, p := range pages {
-		if p.PageType == "log" {
+		if p.PageType != "summary" {
+			continue
+		}
+		slugBase := slugLastSegment(p.Slug)
+		content := convertWikilinks(p.Content)
+		for _, ref := range p.SourceRefs {
+			knID := strings.SplitN(ref, "|", 2)[0]
+			if knID != "" {
+				summaryMap[knID] = summaryEntry{
+					slugBase: slugBase,
+					title:    p.Title,
+					content:  content,
+				}
+			}
+		}
+	}
+
+	// ── Phase 1: wiki pages — entity / concept / index ───────────────────────
+	// Summary pages are intentionally skipped here; they are merged into docs below.
+	for _, p := range pages {
+		if p.PageType == "log" || p.PageType == "summary" {
 			continue
 		}
 		content := convertWikilinks(p.Content)
-		// Slug may include the page-type prefix (e.g. "entity/at-commands"); strip it.
-		slugBase := p.Slug
-		if i := strings.LastIndex(p.Slug, "/"); i >= 0 {
-			slugBase = p.Slug[i+1:]
-		}
+		slugBase := slugLastSegment(p.Slug)
 		var dest string
 		switch p.PageType {
 		case "index":
 			dest = filepath.Join(weknoraDir, "Index.md")
-		case "summary":
-			// Use slug as filename so [[slug]] wikilinks in Index.md resolve correctly.
-			dest = filepath.Join(weknoraDir, "summary", slugBase+".md")
-			content = ensureH1(p.Title, content)
 		case "entity":
 			dest = filepath.Join(weknoraDir, "entity", slugBase+".md")
 			content = ensureH1(p.Title, content)
@@ -120,7 +145,7 @@ func (h *VaultSyncHandler) SyncToVault(c *gin.Context) {
 		}
 	}
 
-	// ── 2. PDF docs (text chunks) + images ──────────────────────────────────
+	// ── Phase 2: docs — merge AI summary (top) + raw chunks (bottom) ─────────
 	knowledges, err := h.knowledgeService.ListKnowledgeByKnowledgeBaseID(ctx, kbID)
 	if err != nil {
 		addErr("list knowledge: " + err.Error())
@@ -135,21 +160,36 @@ func (h *VaultSyncHandler) SyncToVault(c *gin.Context) {
 			continue
 		}
 
-		var sb strings.Builder
+		var rawSB strings.Builder
 		for _, ch := range chunks {
-			sb.WriteString(ch.Content)
-			sb.WriteString("\n\n")
+			rawSB.WriteString(ch.Content)
+			rawSB.WriteString("\n\n")
 		}
-		raw := sb.String()
-
-		// resolve local:// images → copy to attachments, rewrite to ![[name]]
+		raw := rawSB.String()
 		raw, copied := h.resolveImages(ctx, raw, attachDir)
 		result.Images += copied
 
 		docName := safeFilename(strings.TrimSuffix(k.FileName, filepath.Ext(k.FileName)))
 		dest := filepath.Join(weknoraDir, "docs", docName+".md")
-		raw = ensureH1(k.Title, raw)
-		if err := os.WriteFile(dest, []byte(raw), 0o644); err != nil {
+
+		var out strings.Builder
+		if si, ok := summaryMap[k.ID]; ok {
+			// Frontmatter alias: [[summary-slug]] in Index.md resolves here.
+			out.WriteString("---\naliases:\n  - \"")
+			out.WriteString(si.slugBase)
+			out.WriteString("\"\n---\n\n")
+			// AI-generated summary (readable, wikilinked). Also resolve images.
+			summaryContent, summaryCopied := h.resolveImages(ctx, si.content, attachDir)
+			result.Images += summaryCopied
+			out.WriteString(summaryContent)
+			// Raw source text below the fold for full-text search.
+			out.WriteString("\n\n---\n\n## 原始文档\n\n")
+			out.WriteString(raw)
+		} else {
+			out.WriteString(ensureH1(k.Title, raw))
+		}
+
+		if err := os.WriteFile(dest, []byte(out.String()), 0o644); err != nil {
 			addErr(fmt.Sprintf("write doc %s: %v", k.Title, err))
 		} else {
 			result.Docs++
@@ -163,14 +203,13 @@ func (h *VaultSyncHandler) SyncToVault(c *gin.Context) {
 // [[entity/rs-232|RS-232]]  →  [[RS-232]]
 // [[concept/iot|IoT]]       →  [[IoT]]
 // [[summary/slug|Title]]    →  [[Title]]
-// [[slug]]                  →  [[slug]]  (unchanged)
+// [[summary/slug]]          →  [[slug]]   (alias on the merged doc resolves it)
 var wikilinkRe = regexp.MustCompile(`\[\[(?:entity|concept|summary|index)/[^\]|]*\|([^\]]+)\]\]`)
 var wikilinkNoAlias = regexp.MustCompile(`\[\[(?:entity|concept|summary|index)/([^\]|]+)\]\]`)
 
 func convertWikilinks(content string) string {
 	content = wikilinkRe.ReplaceAllString(content, "[[$1]]")
 	content = wikilinkNoAlias.ReplaceAllStringFunc(content, func(m string) string {
-		// extract the last path segment as the display name
 		inner := strings.TrimPrefix(strings.TrimSuffix(m, "]]"), "[[")
 		parts := strings.Split(inner, "/")
 		return "[[" + parts[len(parts)-1] + "]]"
@@ -188,7 +227,6 @@ func (h *VaultSyncHandler) resolveImages(ctx interface{ Value(any) any }, conten
 		if len(sub) < 3 {
 			return m
 		}
-		alt := sub[1]
 		relPath := sub[2] // e.g. "10000/exports/xxx.jpg"
 
 		storageBase := os.Getenv("LOCAL_STORAGE_BASE_DIR")
@@ -202,7 +240,6 @@ func (h *VaultSyncHandler) resolveImages(ctx interface{ Value(any) any }, conten
 		if err := copyFile(srcPath, dstPath); err == nil {
 			copied++
 		}
-		_ = alt
 		return "![[" + fname + "]]"
 	})
 	return result, copied
@@ -226,6 +263,15 @@ func copyFile(src, dst string) error {
 	return err
 }
 
+// slugLastSegment strips the page-type prefix from a slug.
+// "entity/at-commands" → "at-commands"; "at-commands" → "at-commands"
+func slugLastSegment(slug string) string {
+	if i := strings.LastIndex(slug, "/"); i >= 0 {
+		return slug[i+1:]
+	}
+	return slug
+}
+
 // ensureH1 prepends "# title\n\n" only if the content doesn't already start with a heading.
 func ensureH1(title, content string) string {
 	if strings.HasPrefix(strings.TrimSpace(content), "#") {
@@ -235,7 +281,6 @@ func ensureH1(title, content string) string {
 }
 
 func safeFilename(s string) string {
-	// remove characters forbidden in most filesystems
 	r := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "*", "-",
 		"?", "", "\"", "", "<", "", ">", "", "|", "-")
 	return strings.TrimSpace(r.Replace(s))
