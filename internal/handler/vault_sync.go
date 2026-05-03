@@ -90,18 +90,28 @@ func (h *VaultSyncHandler) SyncToVault(c *gin.Context) {
 			continue
 		}
 		content := convertWikilinks(p.Content)
+		// Slug may include the page-type prefix (e.g. "entity/at-commands"); strip it.
+		slugBase := p.Slug
+		if i := strings.LastIndex(p.Slug, "/"); i >= 0 {
+			slugBase = p.Slug[i+1:]
+		}
 		var dest string
 		switch p.PageType {
 		case "index":
 			dest = filepath.Join(weknoraDir, "Index.md")
 		case "summary":
-			dest = filepath.Join(weknoraDir, "summary", safeFilename(p.Title)+".md")
+			// Use slug as filename so [[slug]] wikilinks in Index.md resolve correctly.
+			dest = filepath.Join(weknoraDir, "summary", slugBase+".md")
+			content = ensureH1(p.Title, content)
 		case "entity":
-			dest = filepath.Join(weknoraDir, "entity", safeFilename(p.Title)+".md")
+			dest = filepath.Join(weknoraDir, "entity", slugBase+".md")
+			content = ensureH1(p.Title, content)
 		case "concept":
-			dest = filepath.Join(weknoraDir, "concept", safeFilename(p.Title)+".md")
+			dest = filepath.Join(weknoraDir, "concept", slugBase+".md")
+			content = ensureH1(p.Title, content)
 		default:
-			dest = filepath.Join(weknoraDir, safeFilename(p.PageType)+"_"+safeFilename(p.Title)+".md")
+			dest = filepath.Join(weknoraDir, safeFilename(p.PageType)+"_"+slugBase+".md")
+			content = ensureH1(p.Title, content)
 		}
 		if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
 			addErr(fmt.Sprintf("write wiki %s: %v", p.Slug, err))
@@ -138,6 +148,7 @@ func (h *VaultSyncHandler) SyncToVault(c *gin.Context) {
 
 		docName := safeFilename(strings.TrimSuffix(k.FileName, filepath.Ext(k.FileName)))
 		dest := filepath.Join(weknoraDir, "docs", docName+".md")
+		raw = ensureH1(k.Title, raw)
 		if err := os.WriteFile(dest, []byte(raw), 0o644); err != nil {
 			addErr(fmt.Sprintf("write doc %s: %v", k.Title, err))
 		} else {
@@ -213,6 +224,14 @@ func copyFile(src, dst string) error {
 	defer out.Close()
 	_, err = io.Copy(out, in)
 	return err
+}
+
+// ensureH1 prepends "# title\n\n" only if the content doesn't already start with a heading.
+func ensureH1(title, content string) string {
+	if strings.HasPrefix(strings.TrimSpace(content), "#") {
+		return content
+	}
+	return "# " + title + "\n\n" + content
 }
 
 func safeFilename(s string) string {
