@@ -32,29 +32,8 @@ const (
 // SplitWithDiagnostics performs (matters in SplitParentChild where
 // Split is called once per parent).
 func Split(text string, cfg SplitterConfig) []Chunk {
-	if text == "" {
-		return nil
-	}
-	cfg = ensureDefaults(cfg)
-	chain, profile := resolveChainWithProfile(text, cfg)
-	totalChars := len([]rune(text))
-
-	var lastOut []Chunk
-	for i, tier := range chain {
-		out := runTier(tier, text, cfg, profile)
-		if v := ValidateChunks(out, totalChars, cfg.ChunkSize); v.OK {
-			return out
-		} else {
-			logger.Debugf(context.Background(), "chunker: tier %s rejected: %s", tier, v.Reason)
-		}
-		if tier == TierLegacy && i == len(chain)-1 {
-			lastOut = out
-		}
-	}
-	if lastOut != nil {
-		return lastOut
-	}
-	return SplitText(text, cfg)
+	chunks, _ := SplitWithDiagnostics(text, cfg)
+	return chunks
 }
 
 // TierRejection records why a tier was rejected by the validator and the
