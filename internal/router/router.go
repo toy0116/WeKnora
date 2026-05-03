@@ -69,6 +69,7 @@ type RouterParams struct {
 	DataSourceHandler        *handler.DataSourceHandler
 	WeKnoraCloudHandler      *handler.WeKnoraCloudHandler
 	WikiPageHandler          *handler.WikiPageHandler
+	VaultSyncHandler         *handler.VaultSyncHandler
 }
 
 // NewRouter 创建新的路由
@@ -162,6 +163,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterWeKnoraCloudRoutes(v1, params.WeKnoraCloudHandler)
 		RegisterWikiPageRoutes(v1, params.WikiPageHandler)
 		RegisterChunkerDebugRoutes(v1)
+		RegisterVaultSyncRoutes(v1, params.VaultSyncHandler)
 	}
 
 	return r
@@ -1024,4 +1026,8 @@ func RegisterWikiPageRoutes(r *gin.RouterGroup, wikiHandler *handler.WikiPageHan
 		wiki.GET("/issues", wikiHandler.ListIssues)
 		wiki.PUT("/issues/:issue_id/status", wikiHandler.UpdateIssueStatus)
 	}
+}
+
+func RegisterVaultSyncRoutes(r *gin.RouterGroup, h *handler.VaultSyncHandler) {
+	r.POST("/knowledge-bases/:id/vault-sync", h.SyncToVault)
 }

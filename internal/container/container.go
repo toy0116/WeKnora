@@ -292,6 +292,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(handler.NewDataSourceHandler))
 	// Wiki page handler
 	must(container.Provide(handler.NewWikiPageHandler))
+	must(container.Provide(handler.NewVaultSyncHandler))
 	// IM integration
 	logger.Debugf(ctx, "[Container] Registering IM integration...")
 	must(container.Provide(imPkg.NewService))

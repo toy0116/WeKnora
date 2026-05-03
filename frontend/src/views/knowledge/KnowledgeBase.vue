@@ -29,6 +29,7 @@ import {
   listKnowledgeBases,
   reparseKnowledge,
   batchDeleteKnowledge,
+  syncKnowledgeBaseToVault,
 } from "@/api/knowledge-base/index";
 import FAQEntryManager from './components/FAQEntryManager.vue';
 import DocumentListView from './components/DocumentListView.vue';
@@ -64,6 +65,25 @@ const wikiStatus = ref<{ pendingTasks: number; isActive: boolean; pendingIssues:
   pendingIssues: 0,
 })
 const wikiIsIndexing = computed(() => wikiStatus.value.isActive || wikiStatus.value.pendingTasks > 0)
+
+const vaultSyncing = ref(false)
+const handleVaultSync = async () => {
+  if (!kbId.value || vaultSyncing.value) return
+  vaultSyncing.value = true
+  try {
+    const res: any = await syncKnowledgeBaseToVault(kbId.value)
+    const d = res?.data
+    if (d) {
+      MessagePlugin.success(`同步完成：Wiki ${d.wiki_pages} 页，文档 ${d.docs} 篇，图片 ${d.images} 张 → ${d.vault_path}`)
+    } else {
+      MessagePlugin.success('同步完成')
+    }
+  } catch (e: any) {
+    MessagePlugin.error('同步失败：' + (e?.message || String(e)))
+  } finally {
+    vaultSyncing.value = false
+  }
+}
 const wikiIndexingTip = computed(() => {
   if (!wikiIsIndexing.value) return ''
   return t('knowledgeEditor.wikiBrowser.queueStatus', { count: wikiStatus.value.pendingTasks || 0 })
@@ -1891,6 +1911,17 @@ async function createNewSession(value: string): Promise<void> {
                 </span>
               </t-tooltip>
             </div>
+            <t-tooltip content="同步到 Obsidian Vault" placement="top">
+              <button
+                type="button"
+                class="kb-settings-button"
+                :disabled="!kbId || vaultSyncing"
+                @click="handleVaultSync"
+              >
+                <t-loading v-if="vaultSyncing" size="small" />
+                <t-icon v-else name="upload" size="16px" />
+              </button>
+            </t-tooltip>
             <t-tooltip v-if="canManage" :content="$t('knowledgeBase.settings')" placement="top">
               <button
                 type="button"

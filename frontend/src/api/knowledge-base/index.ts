@@ -380,3 +380,7 @@ export function knowledgeSemanticSearch(data: {
 }) {
   return post('/api/v1/knowledge-search', data);
 }
+
+export function syncKnowledgeBaseToVault(kbId: string) {
+  return post(`/api/v1/knowledge-bases/${kbId}/vault-sync`, {});
+}
