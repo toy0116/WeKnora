@@ -276,3 +276,12 @@ export function runWikiLint(kbId: string) {
 export function autoFixWiki(kbId: string) {
   return post(`/api/v1/knowledgebase/${kbId}/wiki/auto-fix`, {});
 }
+
+// Reset the Wiki Operation Log page back to its empty template. The log is
+// normally append-only; reset is operator-driven (e.g. after a KB-level
+// reset where the operator wants a clean slate). The page row is preserved
+// (slug=log is a global page), only its content is cleared.
+// Returns: { message: string }
+export function resetWikiLog(kbId: string) {
+  return post(`/api/v1/knowledgebase/${kbId}/wiki/log/reset`, {});
+}

@@ -372,6 +372,28 @@ func (s *wikiPageService) GetLog(ctx context.Context, kbID string) (*types.WikiP
 	return page, nil
 }
 
+// defaultLogContent is the empty-state body of the Wiki Operation Log page.
+const defaultLogContent = "# Wiki Operation Log\n\nChronological record of wiki operations.\n"
+
+// ResetLog clears the Wiki Operation Log page back to its empty template.
+func (s *wikiPageService) ResetLog(ctx context.Context, kbID string) error {
+	page, err := s.repo.GetBySlug(ctx, kbID, "log")
+	if err != nil {
+		if errors.Is(err, repository.ErrWikiPageNotFound) {
+			_, cerr := s.createDefaultPage(ctx, kbID, "log", "Log", types.WikiPageTypeLog, defaultLogContent)
+			return cerr
+		}
+		return err
+	}
+	page.Content = defaultLogContent
+	page.Summary = ""
+	page.UpdatedAt = time.Now()
+	if _, err := s.UpdatePage(ctx, page); err != nil {
+		return fmt.Errorf("reset log content: %w", err)
+	}
+	return nil
+}
+
 // GetGraph returns a slice of the wiki link graph for visualization.
 //
 // Two modes are supported:
@@ -387,20 +409,8 @@ func (s *wikiPageService) GetLog(ctx context.Context, kbID string) (*types.WikiP
 //     frontend uses this to drill down when the user clicks / searches a
 //     node in the overview.
 //
-// `Types` is an optional page_type allow-list applied to both the candidate
-// node set and (in ego mode) the frontier expansion. Leaving it empty means
-// no type filter.
-//
 // `Limit <= 0` disables the cap entirely and is reserved for internal
-// callers like the lint service that need to walk every page. The HTTP
-// handler always clamps Limit into a safe range so external traffic can
-// never opt out of truncation.
-//
-// Implementation note: pages are still fetched via repo.ListAll. At 4万
-// pages that's ~10MB of rows + deserialization, which is already on the
-// expensive side but still tractable and keeps the repository interface
-// unchanged. Pushing the filter/top-N down into SQL is a follow-up step
-// (cache layer + DB-side projection) — see CLAUDE.md plan.
+// callers like the lint service that need to walk every page.
 func (s *wikiPageService) GetGraph(ctx context.Context, req *types.WikiGraphRequest) (*types.WikiGraphData, error) {
 	if req == nil {
 		return nil, errors.New("wiki graph request is required")

@@ -217,19 +217,32 @@
           >
             <template #prefixIcon><t-icon name="search" /></template>
           </t-input>
-          <!-- Structural maintenance: archive orphans / strip stale refs / repair broken links -->
-          <t-tooltip :content="$t('knowledgeEditor.wikiBrowser.structuralFixTooltip')" placement="bottom">
-            <t-button
-              size="small"
-              variant="outline"
-              :loading="structuralFixRunning"
-              @click="runStructuralFix"
-              class="wiki-structural-fix-btn"
-            >
-              <template #icon><t-icon name="tools" /></template>
-              {{ $t('knowledgeEditor.wikiBrowser.structuralFix') }}
-            </t-button>
-          </t-tooltip>
+          <!-- Maintenance toolbar: tidy (lint+autofix) and reset log -->
+          <div class="wiki-maintenance-toolbar">
+            <t-tooltip :content="$t('knowledgeEditor.wikiBrowser.structuralFixTooltip')" placement="bottom">
+              <t-button
+                size="small"
+                variant="outline"
+                :loading="structuralFixRunning"
+                @click="runStructuralFix"
+              >
+                <template #icon><t-icon name="tools" /></template>
+                {{ $t('knowledgeEditor.wikiBrowser.structuralFix') }}
+              </t-button>
+            </t-tooltip>
+            <t-tooltip :content="$t('knowledgeEditor.wikiBrowser.resetLogTooltip')" placement="bottom">
+              <t-button
+                size="small"
+                variant="outline"
+                theme="warning"
+                :loading="resetLogRunning"
+                @click="runResetLog"
+              >
+                <template #icon><t-icon name="delete-time" /></template>
+                {{ $t('knowledgeEditor.wikiBrowser.resetLog') }}
+              </t-button>
+            </t-tooltip>
+          </div>
         </div>
 
         <div class="wiki-page-list" ref="pageListRef">
@@ -664,6 +677,7 @@ import {
   listWikiIssues,
   updateWikiIssueStatus,
   autoFixWiki,
+  resetWikiLog,
   type WikiPage,
   type WikiGraphData,
   type WikiStats,
@@ -2454,6 +2468,42 @@ async function runStructuralFix() {
   })
 }
 
+// Reset the Wiki Operation Log page. Operator-driven; the log is
+// normally append-only, but operators sometimes want a clean slate
+// after a KB reset (e.g. delete-all-docs + re-upload). Strong-warning
+// confirmation dialog because the operation is irreversible.
+const resetLogRunning = ref(false)
+
+async function runResetLog() {
+  const dialog = DialogPlugin.confirm({
+    header: t('knowledgeEditor.wikiBrowser.resetLogConfirmTitle'),
+    body: t('knowledgeEditor.wikiBrowser.resetLogConfirmBody'),
+    confirmBtn: { content: t('knowledgeEditor.wikiBrowser.resetLogConfirm'), theme: 'warning' },
+    cancelBtn: t('common.cancel'),
+    onConfirm: async () => {
+      resetLogRunning.value = true
+      try {
+        await resetWikiLog(props.knowledgeBaseId)
+        MessagePlugin.success(t('knowledgeEditor.wikiBrowser.resetLogDone'))
+        // Refresh the log page if it's currently selected; refresh stats
+        // for completeness (version bumped, updated_at changed).
+        await loadStats()
+        if (selectedPage.value && selectedPage.value.slug === 'log') {
+          const res: any = await getWikiPage(props.knowledgeBaseId, 'log')
+          const fresh = (res?.data ?? res) as WikiPage
+          selectedPage.value = fresh
+        }
+        dialog.hide()
+      } catch (e: any) {
+        const msg = e?.message || e?.error || t('knowledgeEditor.wikiBrowser.resetLogFailed')
+        MessagePlugin.error(msg)
+      } finally {
+        resetLogRunning.value = false
+      }
+    },
+  })
+}
+
 async function doSearch() {
   if (!searchQuery.value.trim()) {
     searchResults.value = null
@@ -3678,6 +3728,22 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+// Tidy + Reset-Log buttons sit side-by-side; let them flex equally so the
+// row stays balanced regardless of language label width.
+.wiki-maintenance-toolbar {
+  display: flex;
+  gap: 8px;
+
+  > * {
+    flex: 1;
+  }
+
+  .t-tooltip,
+  :deep(.t-button) {
+    width: 100%;
+  }
 }
 
 .wiki-queue-status {
