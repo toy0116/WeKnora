@@ -25,6 +25,9 @@ function resolveVueOfficePptxEntry(): string {
 }
 
 export default defineConfig({
+  // LocalHub 将 WeKnora 挂载在 /app/weknora/ 下；
+  // 不设 base 时 Vite 输出 /assets/... 绝对路径，浏览器直接请求 LocalHub 根路径导致 404。
+  base: '/app/weknora/',
   plugins: [
     vue(),
     vueJsx(),
