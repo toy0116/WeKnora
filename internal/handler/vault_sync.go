@@ -178,14 +178,13 @@ func (h *VaultSyncHandler) SyncToVault(c *gin.Context) {
 			out.WriteString("---\naliases:\n  - \"")
 			out.WriteString(si.slugBase)
 			out.WriteString("\"\n---\n\n")
-			// AI-generated summary (readable, wikilinked). Also resolve images.
+			// AI summary is already comprehensive — use it as the sole content.
+			// Raw chunks are lower quality (OCR noise) and would hurt readability.
 			summaryContent, summaryCopied := h.resolveImages(ctx, si.content, attachDir)
 			result.Images += summaryCopied
 			out.WriteString(summaryContent)
-			// Raw source text below the fold for full-text search.
-			out.WriteString("\n\n---\n\n## 原始文档\n\n")
-			out.WriteString(raw)
 		} else {
+			// No summary: fall back to raw chunks (only case where they appear).
 			out.WriteString(ensureH1(k.Title, raw))
 		}
 
