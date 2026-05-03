@@ -64,8 +64,21 @@ func (c *MinerUReader) Read(ctx context.Context, req *types.ReadRequest) (*types
 		return nil, fmt.Errorf("MinerU file_parse: %w", err)
 	}
 
-	// HTML -> Markdown conversion (equivalent to Python markdownify)
-	mdContent = htmlToMarkdown(mdContent)
+	// HTML -> Markdown conversion (needed because MinerU returns mixed
+	// markdown + embedded <table> HTML; htmltomd flattens those tables).
+	//
+	// IMPORTANT: htmltomd v2 treats markdown image syntax (`![](url)`) as
+	// plain text and escapes the `[` to `\[`, breaking the regex that
+	// `processImages` and the downstream image_resolver use to find image
+	// references. Symptom: every image MinerU extracts is silently dropped
+	// from the chunked content; image_multimodal asynq tasks never enqueue;
+	// VLM OCR / caption never runs; chunks.image_info stays empty.
+	//
+	// Fix: protect markdown images by replacing them with sentinel
+	// placeholders before the htmltomd pass, then restore them afterwards.
+	// Sentinels are chosen to be invisible to htmltomd (no markdown-special
+	// or HTML-special chars) so they round-trip unchanged.
+	mdContent = htmlToMarkdownProtectImages(mdContent)
 
 	// Process images: decode base64, build ImageRef list, replace refs in markdown
 	imageRefs, mdContent := c.processImages(mdContent, imagesB64)
@@ -276,4 +289,42 @@ func htmlToMarkdown(content string) string {
 		return content
 	}
 	return md
+}
+
+// imgRefProtectPattern matches markdown image syntax `![alt](url)` so the
+// reference can be replaced with a sentinel before htmltomd runs. The alt
+// group is non-greedy to allow `]` inside alt text; the URL group permits
+// one nested level of balanced parentheses (e.g. `https://x.com/a_(b)/c`).
+var imgRefProtectPattern = regexp.MustCompile(`!\[(.*?)\]\(([^()\n]*(?:\([^)]*\)[^()\n]*)*)\)`)
+
+// htmlToMarkdownProtectImages wraps htmlToMarkdown with a placeholder
+// round-trip for markdown image syntax. htmltomd v2 escapes the leading
+// `[` of `![](url)` into `\[`, which the downstream image-extraction
+// regexes do not recognize, so every image MinerU returns gets silently
+// dropped. We replace `![](url)` with `WKIMGSENTINEL<n>WKIMGSENTINEL`
+// markers before the convert pass and restore them afterwards.
+//
+// The sentinel uses only ASCII letters + digits (no `_`, `*`, `[`, `#`,
+// etc.) because htmltomd v2 escapes those markdown-special characters
+// when it sees them in plain text. Pure alphanumeric strings round-trip
+// through htmltomd unchanged — verified empirically with htmltomd v2.5.0.
+func htmlToMarkdownProtectImages(content string) string {
+	const sentinel = "WKIMGSENTINEL"
+	matches := imgRefProtectPattern.FindAllString(content, -1)
+	if len(matches) == 0 {
+		// Fast path: nothing to protect, behave like the old function.
+		return htmlToMarkdown(content)
+	}
+	idx := 0
+	protected := imgRefProtectPattern.ReplaceAllStringFunc(content, func(_ string) string {
+		key := fmt.Sprintf("%s%d%s", sentinel, idx, sentinel)
+		idx++
+		return key
+	})
+	converted := htmlToMarkdown(protected)
+	for i, original := range matches {
+		key := fmt.Sprintf("%s%d%s", sentinel, i, sentinel)
+		converted = strings.ReplaceAll(converted, key, original)
+	}
+	return converted
 }
