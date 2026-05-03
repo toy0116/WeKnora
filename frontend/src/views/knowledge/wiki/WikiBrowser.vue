@@ -1513,10 +1513,12 @@ async function loadPagesForType(type: string, opts: { reset?: boolean } = {}) {
 
   bucket.loading = true
   try {
+    // status=published hides archived pages (e.g. archived by auto-fix).
     const res = await listWikiPages(props.knowledgeBaseId, {
       page_type: type,
       page: bucket.nextPage,
       page_size: WIKI_SIDEBAR_PAGE_SIZE,
+      status: 'published',
     })
     const body: any = (res as any).data || res
     const batch: WikiPage[] = body?.pages || []

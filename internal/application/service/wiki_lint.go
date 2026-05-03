@@ -435,9 +435,14 @@ func (s *WikiLintService) AutoFix(ctx context.Context, kbID string) (int, error)
 		}
 	}
 
-	// Rebuild links after fixes
+	// Rebuild links + regenerate the index page after fixes. RebuildLinks
+	// only refreshes inbound/outbound link metadata; without RebuildIndexPage
+	// the Index directory keeps listing entries that have just been
+	// archived/deleted by the fix pass, which is confusing to operators
+	// (the very next thing they look at after running auto-fix).
 	if fixed > 0 {
 		_ = s.wikiService.RebuildLinks(ctx, kbID)
+		_ = s.wikiService.RebuildIndexPage(ctx, kbID)
 	}
 
 	logger.Infof(ctx, "wiki auto-fix: KB %s — fixed %d issues", kbID, fixed)
