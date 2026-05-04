@@ -228,9 +228,21 @@ func EnrichContentWithImageInfo(content string, imageInfoJSON string) string {
 		processedURLs[imgURL] = true
 
 		imgInfo, found := imageInfoMap[imgURL]
+
+		// Prefer the HTTP URL from imgInfo.URL so the LLM context and any
+		// markdown the model reproduces use a browser-renderable URL instead
+		// of a local:// storage path.
+		displayURL := imgURL
+		if found && imgInfo != nil && imgInfo.URL != "" && imgInfo.URL != imgURL {
+			displayURL = imgInfo.URL
+		}
+
 		var b strings.Builder
-		b.WriteString(fmt.Sprintf("<image url=\"%s\">\n", imgURL))
-		b.WriteString(fmt.Sprintf("<image_original>%s</image_original>\n", match[0]))
+		b.WriteString(fmt.Sprintf("<image url=\"%s\">\n", displayURL))
+		// Replace local:// with the HTTP URL in <image_original> so the LLM
+		// can reproduce a working image link in its answer.
+		originalMD := strings.Replace(match[0], imgURL, displayURL, 1)
+		b.WriteString(fmt.Sprintf("<image_original>%s</image_original>\n", originalMD))
 		if found && imgInfo != nil {
 			b.WriteString(BuildImageInfoXML(imgInfo))
 		}

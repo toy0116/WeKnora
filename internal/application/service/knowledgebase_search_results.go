@@ -117,12 +117,13 @@ func (s *knowledgeBaseService) rewriteImageInfoURLs(ctx context.Context, results
 					changed = true
 				}
 			}
-			if strings.HasPrefix(infos[i].OriginalURL, "local://") {
-				if httpURL, err := s.fileSvc.GetFileURL(ctx, infos[i].OriginalURL); err == nil && httpURL != infos[i].OriginalURL {
-					infos[i].OriginalURL = httpURL
-					changed = true
-				}
-			}
+			// OriginalURL intentionally kept as local:// — it is used as the
+			// lookup key in EnrichContentWithImageInfo to match inline Markdown
+			// image links (e.g. ![](local://...)) that appear verbatim in chunk
+			// text content.  Rewriting it to HTTP breaks that lookup and causes
+			// the LLM to emit local:// URLs in its response (browser can't
+			// render them).  Only URL (used for display / the <image url> attr)
+			// needs to be an HTTP presigned URL.
 		}
 		if changed {
 			if data, err := json.Marshal(infos); err == nil {
