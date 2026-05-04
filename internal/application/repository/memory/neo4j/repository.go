@@ -98,6 +98,54 @@ func (r *MemoryRepository) SaveEpisode(ctx context.Context, episode *types.Episo
 	return nil
 }
 
+// FindEntitiesByNames retrieves existing entities connected to the given user (via Episode nodes)
+// whose name matches any of the provided names. Used for conflict detection before saving new memory.
+func (r *MemoryRepository) FindEntitiesByNames(ctx context.Context, userID string, names []string) ([]*types.Entity, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	session := r.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (interface{}, error) {
+		query := `
+			MATCH (e:Episode)-[:MENTIONS]->(n:Entity)
+			WHERE e.user_id = $user_id AND n.name IN $names
+			RETURN DISTINCT n
+		`
+		res, err := tx.Run(ctx, query, map[string]interface{}{
+			"user_id": userID,
+			"names":   names,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		var entities []*types.Entity
+		for res.Next(ctx) {
+			record := res.Record()
+			node, _ := record.Get("n")
+			entityNode := node.(neo4j.Node)
+
+			entity := &types.Entity{
+				Title: entityNode.Props["name"].(string),
+			}
+			if t, ok := entityNode.Props["type"].(string); ok {
+				entity.Type = t
+			}
+			if d, ok := entityNode.Props["description"].(string); ok {
+				entity.Description = d
+			}
+			entities = append(entities, entity)
+		}
+		return entities, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.([]*types.Entity), nil
+}
+
 func (r *MemoryRepository) FindRelatedEpisodes(ctx context.Context, userID string, keywords []string, limit int) ([]*types.Episode, error) {
 	session := r.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)

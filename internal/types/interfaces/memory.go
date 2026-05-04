@@ -23,6 +23,9 @@ type MemoryRepository interface {
 	// FindRelatedEpisodes finds episodes related to the given keywords for a specific user
 	FindRelatedEpisodes(ctx context.Context, userID string, keywords []string, limit int) ([]*types.Episode, error)
 
+	// FindEntitiesByNames retrieves existing user-scoped entities by name for conflict detection
+	FindEntitiesByNames(ctx context.Context, userID string, names []string) ([]*types.Entity, error)
+
 	// IsAvailable checks if the memory repository is available
 	IsAvailable(ctx context.Context) bool
 }
