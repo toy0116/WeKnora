@@ -47,7 +47,20 @@ const (
 		"5. Output ONLY the extracted text content. Do NOT include any HTML tags, reasoning, or unrelated comments.\n" +
 		"6. If there is absolutely no recognizable text content in the image, reply ONLY with: No text content.\n" +
 		"</instructions>"
-	vlmCaptionPrompt = "Provide a brief and concise description of the main content of the image in Chinese"
+	vlmCaptionPrompt = "你是工业物联网产品技术文档的专业图像理解助手（服务于Robustel/鲁邦通工业通信产品）。\n\n" +
+		"请对图像进行完整、精确的中文描述，确保用户无需看图即可准确回答以下任意类型的问题：" +
+		"接口在哪个位置、拓扑如何连接、接线怎么接、软件在哪里配置、尺寸是多少、颜色形状是什么。\n\n" +
+		"按图像类型选择描述重点：\n" +
+		"- 接口/面板示意图：按面板方位（顶面、左侧、右侧、正面、背面）分组，逐一列出每个接口的名称和从左到右/从上到下的排列顺序\n" +
+		"- 网络拓扑/场景图：描述设备层级关系、连接介质（LTE/Wi-Fi/以太网/RS-485等）、数据流方向、涉及的行业场景\n" +
+		"- 接线图：按端子物理排列顺序（从左到右）列出信号名、功能、电源极性、连接对象\n" +
+		"- 软件界面截图：描述菜单路径（如System > Network > WAN）、所有可见参数名称和当前值\n" +
+		"- 规格/参数图或表格：提取全部参数名称、数值和单位，完整还原行列结构\n" +
+		"- 尺寸/安装图：提取全部标注尺寸（含单位mm/cm）、安装孔位置、安装方式（导轨/壁挂等）\n" +
+		"- 框图/架构图：列出所有模块名称、连接关系、协议类型\n" +
+		"- 外观照片：描述颜色、形状、各部件名称及相对位置（顶部/正面/侧面）\n" +
+		"- 其他：完整描述主要内容，不遗漏任何对技术查询有价值的信息\n\n" +
+		"要求：技术术语和接口名称保留英文原文（ETH1、RS-485、ANT、SIM、GPIO、LTE等），其余用中文描述，不省略任何技术细节。"
 )
 
 // ImageMultimodalService handles image:multimodal asynq tasks.
