@@ -53,12 +53,14 @@ extract:
       ## Step 1: Entity Extraction and Attribute Enrichment
       1. **Extract core entities**: Read through the text and extract all core entities relevant to the task in logical order (such as narrative order or entity association closeness).
       2. **Enrich entity attributes**: For each extracted entity, comprehensively supplement its detailed attributes explicitly mentioned in the text, ensuring no key attributes are omitted.
+      3. **Entity limit**: Extract at most 30 of the most important entities. For dense specification tables, prioritize product models, key interfaces, and core protocols — skip low-value entries like generic terms (e.g. "button", "LED") that add noise without informational value.
 
       ## Step 2: Relationship Extraction and Verification
       1. **Identify relationship types**: Select corresponding types only from the specified relationship list. Allowed relationship types are: %s.
       2. **Extract valid relationships**: Based on the extracted entities and attributes, identify relationships that genuinely exist in the text, ensuring relationships are factually accurate with no false associations.
       3. **Clarify relationship subjects**: For each extracted relationship, clearly annotate the two associated entities to avoid subject confusion.
       4. **Supplement related attributes**: If the text contains supplementary information directly related to a relationship, include it as a related attribute of the relationship.
+      5. **Relationship limit**: Extract at most 50 relationships. Omit trivially obvious ones (e.g. product "支持" every listed protocol) and focus on structurally meaningful connections.
     tags:
       - "Author"
       - "Alias"

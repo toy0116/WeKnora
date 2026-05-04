@@ -171,7 +171,7 @@ func NewExtractor(
 		template: template,
 		chatOpt: &chat.ChatOptions{
 			Temperature: 0.3,
-			MaxTokens:   4096,
+			MaxTokens:   8192, // raised from 4096: dense spec-table chunks were truncated and archived
 			Thinking:    &think,
 		},
 	}
