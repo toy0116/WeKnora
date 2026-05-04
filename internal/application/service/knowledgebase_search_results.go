@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/searchutil"
@@ -86,8 +87,49 @@ func (s *knowledgeBaseService) processSearchResults(ctx context.Context,
 
 	searchutil.EnrichSearchResultsImageInfo(ctx, s.chunkRepo, tenantID, searchResults)
 
+	// Rewrite local:// image URLs to presigned HTTP URLs so the browser can render them.
+	// Chunks indexed before APP_EXTERNAL_URL was configured have local:// stored in image_info.
+	s.rewriteImageInfoURLs(ctx, searchResults)
+
 	logger.Infof(ctx, "Search results processed, total: %d", len(searchResults))
 	return searchResults, nil
+}
+
+// rewriteImageInfoURLs converts local:// URLs in image_info to presigned HTTP URLs
+// via fileService.GetFileURL. Results without image_info or already-HTTP URLs are skipped.
+func (s *knowledgeBaseService) rewriteImageInfoURLs(ctx context.Context, results []*types.SearchResult) {
+	if s.fileSvc == nil {
+		return
+	}
+	for _, r := range results {
+		if r.ImageInfo == "" {
+			continue
+		}
+		var infos []types.ImageInfo
+		if err := json.Unmarshal([]byte(r.ImageInfo), &infos); err != nil {
+			continue
+		}
+		changed := false
+		for i := range infos {
+			if strings.HasPrefix(infos[i].URL, "local://") {
+				if httpURL, err := s.fileSvc.GetFileURL(ctx, infos[i].URL); err == nil && httpURL != infos[i].URL {
+					infos[i].URL = httpURL
+					changed = true
+				}
+			}
+			if strings.HasPrefix(infos[i].OriginalURL, "local://") {
+				if httpURL, err := s.fileSvc.GetFileURL(ctx, infos[i].OriginalURL); err == nil && httpURL != infos[i].OriginalURL {
+					infos[i].OriginalURL = httpURL
+					changed = true
+				}
+			}
+		}
+		if changed {
+			if data, err := json.Marshal(infos); err == nil {
+				r.ImageInfo = string(data)
+			}
+		}
+	}
 }
 
 // chunkIndex holds pre-computed lookup structures for processing search results.
