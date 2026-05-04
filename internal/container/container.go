@@ -293,6 +293,10 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// Wiki page handler
 	must(container.Provide(handler.NewWikiPageHandler))
 	must(container.Provide(handler.NewVaultSyncHandler))
+	// Queue monitor (only when Redis is available)
+	if redisAvailable {
+		must(container.Provide(handler.NewQueueMonitorHandler))
+	}
 	// IM integration
 	logger.Debugf(ctx, "[Container] Registering IM integration...")
 	must(container.Provide(imPkg.NewService))

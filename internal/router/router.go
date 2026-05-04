@@ -70,6 +70,7 @@ type RouterParams struct {
 	WeKnoraCloudHandler      *handler.WeKnoraCloudHandler
 	WikiPageHandler          *handler.WikiPageHandler
 	VaultSyncHandler         *handler.VaultSyncHandler
+	QueueMonitorHandler      *handler.QueueMonitorHandler `optional:"true"`
 }
 
 // NewRouter 创建新的路由
@@ -117,6 +118,11 @@ func NewRouter(params RouterParams) *gin.Engine {
 
 	// IM 回调路由（在认证中间件之前注册，使用各平台自身的签名验证）
 	RegisterIMRoutes(r, params.IMHandler)
+
+	// Queue monitor UI + API (local-only admin tool, no auth required)
+	if params.QueueMonitorHandler != nil {
+		RegisterQueueMonitorRoutes(r, nil, params.QueueMonitorHandler)
+	}
 
 	// 认证中间件
 	r.Use(middleware.Auth(params.TenantService, params.UserService, params.Config))
@@ -731,7 +737,8 @@ func serveFrontendStatic(r *gin.Engine) {
 			return
 		}
 		path := c.Request.URL.Path
-		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/health") || strings.HasPrefix(path, "/swagger/") {
+		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/health") ||
+			strings.HasPrefix(path, "/swagger/") || strings.HasPrefix(path, "/admin/") {
 			c.Next()
 			return
 		}
