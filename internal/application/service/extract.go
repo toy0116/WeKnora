@@ -102,7 +102,7 @@ func NewChunkExtractTask(
 	if err != nil {
 		return err
 	}
-	task := asynq.NewTask(types.TypeChunkExtract, payload, asynq.MaxRetry(3))
+	task := asynq.NewTask(types.TypeChunkExtract, payload, asynq.Queue("low"), asynq.MaxRetry(3))
 	info, err := client.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "failed to enqueue task: %v", err)
