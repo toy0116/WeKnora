@@ -2897,8 +2897,11 @@ func (s *knowledgeService) generateQuestionsWithContext(ctx context.Context,
 		},
 	}, &chat.ChatOptions{
 		Temperature: 0.7,
-		MaxTokens:   512,
-		Thinking:    &thinking,
+		// Raised 512→1024: 3-5 questions in Chinese/technical content typically
+		// reach 600-800 tokens; 512 caused 17% of calls to be truncated (incomplete
+		// question lists) and re-queued, wasting both tokens and queue slots.
+		MaxTokens: 1024,
+		Thinking:  &thinking,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate questions: %w", err)
