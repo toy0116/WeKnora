@@ -2614,6 +2614,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	llmCallSuccess := 0
 	llmCallFailed := 0
 	llmCallEmpty := 0
+	llmCallSkipped := 0 // chunks whose questions were already stored (retry after index failure)
 	generatedQuestionsTotal := 0
 	chunkMetadataSetFailed := 0
 	chunkUpdateFailed := 0
@@ -2623,7 +2624,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	defer func() {
 		logger.Infof(
 			ctx,
-			"Question generation stats: knowledge=%s kb=%s retry=%d/%d status=%s elapsed=%s chunks(total=%d,text=%d,empty_text=%d) llm(attempt=%d,success=%d,empty=%d,failed=%d) generated_questions=%d chunk_update_failed=%d metadata_set_failed=%d index(prepared=%d,attempted=%v,succeeded=%v)",
+			"Question generation stats: knowledge=%s kb=%s retry=%d/%d status=%s elapsed=%s chunks(total=%d,text=%d,empty_text=%d) llm(attempt=%d,success=%d,empty=%d,failed=%d,skipped=%d) generated_questions=%d chunk_update_failed=%d metadata_set_failed=%d index(prepared=%d,attempted=%v,succeeded=%v)",
 			payload.KnowledgeID,
 			payload.KnowledgeBaseID,
 			retryCount,
@@ -2637,6 +2638,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 			llmCallSuccess,
 			llmCallEmpty,
 			llmCallFailed,
+			llmCallSkipped,
 			generatedQuestionsTotal,
 			chunkUpdateFailed,
 			chunkMetadataSetFailed,
@@ -2770,6 +2772,30 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	for i, chunk := range textChunks {
 		if strings.TrimSpace(chunk.Content) == "" {
 			emptyContentChunks++
+			continue
+		}
+
+		// Fast path: if questions were already generated and stored (e.g. on a
+		// retry after an index failure), skip the LLM call and just rebuild the
+		// index entries from the persisted metadata. This avoids re-spending LLM
+		// tokens when only the embedding/indexing step failed previously.
+		if existingMeta, err := chunk.DocumentMetadata(); err == nil &&
+			existingMeta != nil && len(existingMeta.GeneratedQuestions) > 0 {
+			llmCallSkipped++
+			generatedQuestionsTotal += len(existingMeta.GeneratedQuestions)
+			for _, gq := range existingMeta.GeneratedQuestions {
+				sourceID := fmt.Sprintf("%s-%s", chunk.ID, gq.ID)
+				indexInfoList = append(indexInfoList, &types.IndexInfo{
+					Content:         gq.Question,
+					SourceID:        sourceID,
+					SourceType:      types.ChunkSourceType,
+					ChunkID:         chunk.ID,
+					KnowledgeID:     knowledge.ID,
+					KnowledgeBaseID: knowledge.KnowledgeBaseID,
+					IsEnabled:       true,
+				})
+			}
+			logger.Debugf(ctx, "Reusing %d cached questions for chunk %s (skip LLM)", len(existingMeta.GeneratedQuestions), chunk.ID)
 			continue
 		}
 
