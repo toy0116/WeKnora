@@ -312,6 +312,9 @@ const selectedIds = ref<Set<string>>(new Set());
 let lastSelectedIndex = -1;
 const batchDeleteDialog = ref(false);
 const batchDeleting = ref(false);
+const batchTagDialog = ref(false);
+const batchTagValue = ref<string>('');
+const batchTagging = ref(false);
 
 const selectedTagId = ref<string>('');
 const tagList = ref<any[]>([]);
@@ -1566,6 +1569,12 @@ const handleOpenKBSettings = () => {
   uiStore.openKBSettings(kbId.value);
 };
 
+const handleOpenQueueMonitor = () => {
+  // Works whether frontend is accessed directly (port 3120) or via LocalHub proxy (/app/weknora/…)
+  const base = window.location.origin + (window.location.pathname.startsWith('/app/') ? '/app/weknora' : '');
+  window.open(base + '/admin/queue', '_blank');
+};
+
 const handleNavigateToKbList = () => {
   router.push('/platform/knowledge-bases');
 };
@@ -1703,6 +1712,34 @@ const clearSelection = () => {
 const openBatchDeleteDialog = () => {
   if (selectedIds.value.size === 0) return;
   batchDeleteDialog.value = true;
+};
+
+const openBatchTagDialog = () => {
+  if (selectedIds.value.size === 0) return;
+  batchTagValue.value = '';
+  batchTagDialog.value = true;
+};
+
+const confirmBatchTag = async () => {
+  if (batchTagging.value || selectedIds.value.size === 0) return;
+  batchTagging.value = true;
+  try {
+    const updates: Record<string, string | null> = {};
+    for (const id of selectedIds.value) {
+      updates[id] = batchTagValue.value || null;
+    }
+    await updateKnowledgeTagBatch({ updates, kb_id: kbId.value });
+    MessagePlugin.success(t('knowledgeBase.batchTagSuccess', { count: selectedIds.value.size }));
+    clearSelection();
+    batchTagDialog.value = false;
+    page = 1;
+    loadKnowledgeFiles(kbId.value);
+    loadTags(kbId.value);
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || t('knowledgeBase.batchTagFailed'));
+  } finally {
+    batchTagging.value = false;
+  }
 };
 
 const confirmBatchDelete = async () => {
@@ -1930,6 +1967,15 @@ async function createNewSession(value: string): Promise<void> {
                 @click="handleOpenKBSettings"
               >
                 <t-icon name="setting" size="16px" />
+              </button>
+            </t-tooltip>
+            <t-tooltip v-if="canManage" content="队列监控" placement="top">
+              <button
+                type="button"
+                class="kb-settings-button"
+                @click="handleOpenQueueMonitor"
+              >
+                <t-icon name="queue" size="16px" />
               </button>
             </t-tooltip>
           </div>
@@ -2477,8 +2523,10 @@ async function createNewSession(value: string): Promise<void> {
               <DocumentBatchBar
                 :count="selectedIds.size"
                 :loading="batchDeleting"
+                :tagging="batchTagging"
                 @clear="clearSelection"
                 @delete="openBatchDeleteDialog"
+                @tag="openBatchTagDialog"
               />
             </div>
           </div>
@@ -2538,6 +2586,31 @@ async function createNewSession(value: string): Promise<void> {
                   {{ batchDeleting ? '...' : t('knowledgeBase.confirmDelete') }}
                 </span>
               </div>
+            </div>
+          </t-dialog>
+
+          <!-- 批量设置标签弹窗 -->
+          <t-dialog
+            v-model:visible="batchTagDialog"
+            :header="t('knowledgeBase.batchSetTagTitle', { count: selectedIds.size })"
+            :confirm-btn="{ content: t('common.confirm'), loading: batchTagging }"
+            :cancel-btn="t('common.cancel')"
+            width="420px"
+            @confirm="confirmBatchTag"
+            @cancel="batchTagDialog = false"
+          >
+            <div class="batch-tag-dialog-body">
+              <p class="batch-tag-dialog-hint">{{ t('knowledgeBase.batchSetTagHint') }}</p>
+              <t-select
+                v-model="batchTagValue"
+                :options="[
+                  { label: t('knowledgeBase.noTag'), value: '' },
+                  ...tagDropdownOptions.map((o: any) => ({ label: o.content, value: String(o.value) }))
+                ]"
+                :placeholder="t('knowledgeBase.selectTag')"
+                clearable
+                style="width: 100%;"
+              />
             </div>
           </t-dialog>
 
@@ -3213,6 +3286,17 @@ async function createNewSession(value: string): Promise<void> {
 
   & > * {
     pointer-events: auto;
+  }
+}
+
+.batch-tag-dialog-body {
+  padding: 4px 0 8px;
+
+  .batch-tag-dialog-hint {
+    margin: 0 0 12px;
+    font-size: 13px;
+    color: var(--td-text-color-secondary);
+    line-height: 1.5;
   }
 }
 

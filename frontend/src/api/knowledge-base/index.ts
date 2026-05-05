@@ -233,7 +233,7 @@ export function deleteKnowledgeBaseTag(kbId: string, tagSeqId: number, params?: 
   return del(`/api/v1/knowledge-bases/${kbId}/tags/${tagSeqId}${forceQuery}`);
 }
 
-export function updateKnowledgeTagBatch(data: { updates: Record<string, string | null> }) {
+export function updateKnowledgeTagBatch(data: { updates: Record<string, string | null>; kb_id?: string }) {
   return put(`/api/v1/knowledge/tags`, data);
 }
 

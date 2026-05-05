@@ -4,11 +4,13 @@ import { useI18n } from 'vue-i18n';
 defineProps<{
   count: number;
   loading?: boolean;
+  tagging?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'clear'): void;
   (e: 'delete'): void;
+  (e: 'tag'): void;
 }>();
 
 const { t } = useI18n();
@@ -25,6 +27,16 @@ const { t } = useI18n();
           </t-button>
         </div>
         <div class="batch-bar-actions">
+          <t-button
+            theme="default"
+            variant="outline"
+            size="small"
+            :loading="tagging"
+            @click="emit('tag')"
+          >
+            <template #icon><t-icon name="tag" size="14px" /></template>
+            {{ t('knowledgeBase.batchSetTag') }}
+          </t-button>
           <t-button
             theme="danger"
             variant="outline"
