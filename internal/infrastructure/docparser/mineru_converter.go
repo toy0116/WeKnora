@@ -20,7 +20,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 )
 
-const mineruTimeout = 1000 * time.Second // large docs can take a while
+const mineruTimeout = 3 * time.Hour // large PDFs via subprocess-isolation can take 1-2h; match asynq task timeout
 
 var b64DataURIPattern = regexp.MustCompile(`^data:image/(\w+);base64,(.+)$`)
 
