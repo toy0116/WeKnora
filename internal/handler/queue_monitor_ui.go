@@ -88,15 +88,25 @@ const queueMonitorHTML = `<!DOCTYPE html>
     <div id="type-bars"><div class="spinner"></div> 加载中…</div>
   </div>
 
-  <!-- tabs: documents / failures -->
+  <!-- tabs: documents / failed-docs / failures -->
   <div class="tabs">
     <div class="tab active" onclick="switchTab('docs')">文档进度</div>
+    <div class="tab" onclick="switchTab('failed-docs')" id="tab-btn-failed-docs">解析失败文档</div>
     <div class="tab" onclick="switchTab('failures')">失败任务</div>
   </div>
 
   <div id="tab-docs" class="section">
     <h2>文档处理进度</h2>
     <div id="docs-table"><div class="spinner"></div> 加载中…</div>
+  </div>
+
+  <div id="tab-failed-docs" class="section" style="display:none">
+    <h2>解析失败文档</h2>
+    <div class="action-bar">
+      <button class="btn btn-primary" onclick="retryAllFailedDocs()">全部重新解析</button>
+      <span class="note">无需重新上传 · 直接重新触发解析 pipeline</span>
+    </div>
+    <div id="failed-docs-table"><div class="spinner"></div> 加载中…</div>
   </div>
 
   <div id="tab-failures" class="section" style="display:none">
@@ -112,16 +122,21 @@ const queueMonitorHTML = `<!DOCTYPE html>
 </div>
 
 <script>
-const API = '/admin/queue/api';
+// Resolve API base relative to the current page URL so it works whether
+// accessed directly (port 3120) or via LocalHub proxy (/app/weknora/admin/queue).
+const _base = window.location.pathname.replace(/\/admin\/queue.*$/, '');
+const API = _base + '/admin/queue/api';
 let selectedTaskIDs = new Set();
 
 // ── tab switch ────────────────────────────────────────────────────────────────
 function switchTab(tab) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   event.target.classList.add('active');
-  document.getElementById('tab-docs').style.display = tab === 'docs' ? '' : 'none';
-  document.getElementById('tab-failures').style.display = tab === 'failures' ? '' : 'none';
-  if (tab === 'failures') loadFailures();
+  document.getElementById('tab-docs').style.display        = tab === 'docs'        ? '' : 'none';
+  document.getElementById('tab-failed-docs').style.display = tab === 'failed-docs' ? '' : 'none';
+  document.getElementById('tab-failures').style.display    = tab === 'failures'    ? '' : 'none';
+  if (tab === 'failures')    loadFailures();
+  if (tab === 'failed-docs') loadFailedDocs();
 }
 
 // ── stats ─────────────────────────────────────────────────────────────────────
@@ -271,10 +286,87 @@ async function doReenqueue(ids) {
   }
 }
 
+// ── failed docs (parse_status = 'failed') ────────────────────────────────────
+async function loadFailedDocs() {
+  try {
+    const r = await fetch(API + '/failed-docs');
+    const d = await r.json();
+    const docs = d.failed_docs || [];
+
+    // Update tab badge
+    const btn = document.getElementById('tab-btn-failed-docs');
+    if (btn) btn.textContent = docs.length > 0 ? ` + "`" + `解析失败文档 (${docs.length})` + "`" + ` : '解析失败文档';
+
+    if (!docs.length) {
+      document.getElementById('failed-docs-table').innerHTML = '<div class="empty">✅ 没有解析失败的文档</div>';
+      return;
+    }
+    const rows = docs.map(doc => ` + "`" + `<tr>
+      <td>${doc.title || doc.knowledge_id}</td>
+      <td><span class="badge failed">失败</span></td>
+      <td style="color:#ff3b30;font-size:12px;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${doc.error_msg}">${doc.error_msg || '(无错误信息)'}</td>
+      <td class="mono">${doc.updated_at}</td>
+      <td>
+        <button class="btn btn-primary" onclick="retryDoc('${doc.knowledge_id}', this)">重新解析</button>
+      </td>
+    </tr>` + "`" + `).join('');
+    document.getElementById('failed-docs-table').innerHTML = ` + "`" + `
+      <table>
+        <thead><tr>
+          <th>文档</th><th>状态</th><th>错误信息</th><th>更新时间</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` + "`" + `;
+  } catch(e) {
+    document.getElementById('failed-docs-table').innerHTML = '<div class="empty">加载失败：' + e + '</div>';
+  }
+}
+
+async function retryDoc(id, btn) {
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  try {
+    const r = await fetch(API + '/retry-doc/' + id, { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      btn.textContent = '✅ 已重新解析';
+      btn.style.background = '#34c759';
+    } else {
+      btn.textContent = '❌ 失败';
+      btn.disabled = false;
+      alert('重新解析失败：' + (d.error || JSON.stringify(d)));
+    }
+  } catch(e) {
+    btn.textContent = '❌ 错误';
+    btn.disabled = false;
+    alert('网络错误：' + e);
+  }
+}
+
+async function retryAllFailedDocs() {
+  if (!confirm('将所有解析失败的文档重新解析？（无需重新上传）')) return;
+  try {
+    const r = await fetch(API + '/retry-all-failed-docs', { method: 'POST' });
+    const d = await r.json();
+    const msg = ` + "`" + `已重新提交 ${d.queued} 个文档${d.errors?.length ? '\n失败: ' + d.errors.join('\n') : ''}` + "`" + `;
+    alert(msg);
+    loadFailedDocs();
+    loadStats();
+  } catch(e) {
+    alert('操作失败：' + e);
+  }
+}
+
 // ── init + auto-refresh ───────────────────────────────────────────────────────
 function refreshAll() {
   loadStats();
   loadDocs();
+  // 静默刷新失败文档 tab badge（不管当前 tab 是否激活）
+  fetch(API + '/failed-docs').then(r => r.json()).then(d => {
+    const btn = document.getElementById('tab-btn-failed-docs');
+    const n = (d.failed_docs || []).length;
+    if (btn) btn.textContent = n > 0 ? ` + "`" + `解析失败文档 (${n})` + "`" + ` : '解析失败文档';
+  }).catch(() => {});
 }
 refreshAll();
 setInterval(refreshAll, 30000);

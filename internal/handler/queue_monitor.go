@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -18,15 +20,16 @@ import (
 // It caches queue stats in memory (refreshed every 30s by a background goroutine)
 // so HTTP handlers don't block on full Redis scans.
 type QueueMonitorHandler struct {
-	redis *redis.Client
-	db    *gorm.DB
+	redis     *redis.Client
+	db        *gorm.DB
+	kgService interfaces.KnowledgeService // optional · for retry-doc
 
 	mu        sync.RWMutex
 	lastStats *QueueStats
 }
 
-func NewQueueMonitorHandler(redisClient *redis.Client, db *gorm.DB) *QueueMonitorHandler {
-	h := &QueueMonitorHandler{redis: redisClient, db: db}
+func NewQueueMonitorHandler(redisClient *redis.Client, db *gorm.DB, kgService interfaces.KnowledgeService) *QueueMonitorHandler {
+	h := &QueueMonitorHandler{redis: redisClient, db: db, kgService: kgService}
 	go h.refreshLoop()
 	return h
 }
@@ -407,6 +410,171 @@ func (h *QueueMonitorHandler) ReenqueueFailures(c *gin.Context) {
 	go h.refresh()
 
 	c.JSON(http.StatusOK, gin.H{"requeued": requeued})
+}
+
+// FailedDoc is returned by GetFailedDocs.
+type FailedDoc struct {
+	KnowledgeID string `json:"knowledge_id"`
+	Title       string `json:"title"`
+	ParseStatus string `json:"parse_status"`
+	ErrorMsg    string `json:"error_msg"`
+	TenantID    uint64 `json:"tenant_id"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// GetFailedDocs returns documents whose parse_status is 'failed'.
+// GET /admin/queue/api/failed-docs
+func (h *QueueMonitorHandler) GetFailedDocs(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	type row struct {
+		ID          string    `gorm:"column:id"`
+		Title       string    `gorm:"column:title"`
+		ParseStatus string    `gorm:"column:parse_status"`
+		ErrorMsg    string    `gorm:"column:error_message"`
+		TenantID    uint64    `gorm:"column:tenant_id"`
+		UpdatedAt   time.Time `gorm:"column:updated_at"`
+	}
+
+	var rows []row
+	err := h.db.WithContext(ctx).Raw(`
+		SELECT id, title, parse_status, error_message, tenant_id, updated_at
+		FROM knowledges
+		WHERE parse_status = 'failed'
+		  AND deleted_at IS NULL
+		ORDER BY updated_at DESC
+		LIMIT 200
+	`).Scan(&rows).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	docs := make([]FailedDoc, 0, len(rows))
+	for _, r := range rows {
+		docs = append(docs, FailedDoc{
+			KnowledgeID: r.ID,
+			Title:       r.Title,
+			ParseStatus: r.ParseStatus,
+			ErrorMsg:    r.ErrorMsg,
+			TenantID:    r.TenantID,
+			UpdatedAt:   r.UpdatedAt.Format("2006-01-02 15:04"),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"failed_docs": docs, "total": len(docs)})
+}
+
+// buildAdminCtx looks up the Tenant record and injects both TenantIDContextKey
+// and TenantInfoContextKey into ctx — the service layer asserts on both.
+func (h *QueueMonitorHandler) buildAdminCtx(ctx context.Context, tenantID uint64) (context.Context, error) {
+	var tenant types.Tenant
+	if err := h.db.WithContext(ctx).
+		Where("id = ?", tenantID).
+		First(&tenant).Error; err != nil {
+		return ctx, fmt.Errorf("tenant %d not found: %w", tenantID, err)
+	}
+	ctx = context.WithValue(ctx, types.TenantIDContextKey, tenantID)
+	ctx = context.WithValue(ctx, types.TenantInfoContextKey, &tenant)
+	return ctx, nil
+}
+
+// RetryDoc triggers a reparse for a single failed document.
+// POST /admin/queue/api/retry-doc/:id
+func (h *QueueMonitorHandler) RetryDoc(c *gin.Context) {
+	knowledgeID := c.Param("id")
+	if knowledgeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "knowledge id required"})
+		return
+	}
+	if h.kgService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "knowledge service not available"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Look up tenant_id so we can build the admin context
+	var tenantID uint64
+	if err := h.db.WithContext(ctx).Raw(
+		"SELECT tenant_id FROM knowledges WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+		knowledgeID,
+	).Scan(&tenantID).Error; err != nil || tenantID == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "document not found"})
+		return
+	}
+
+	adminCtx, err := h.buildAdminCtx(ctx, tenantID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	knowledge, err := h.kgService.ReparseKnowledge(adminCtx, knowledgeID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":           true,
+		"knowledge_id": knowledge.ID,
+		"title":        knowledge.Title,
+		"parse_status": knowledge.ParseStatus,
+	})
+}
+
+// RetryAllFailedDocs triggers reparse for all documents with parse_status = 'failed'.
+// POST /admin/queue/api/retry-all-failed-docs
+func (h *QueueMonitorHandler) RetryAllFailedDocs(c *gin.Context) {
+	if h.kgService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "knowledge service not available"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	type row struct {
+		ID       string `gorm:"column:id"`
+		TenantID uint64 `gorm:"column:tenant_id"`
+	}
+	var rows []row
+	if err := h.db.WithContext(ctx).Raw(`
+		SELECT id, tenant_id FROM knowledges
+		WHERE parse_status = 'failed' AND deleted_at IS NULL
+		LIMIT 50
+	`).Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	queued := 0
+	var errs []string
+	// Cache admin contexts per tenant to avoid repeated lookups
+	tenantCtxCache := map[uint64]context.Context{}
+	for _, r := range rows {
+		adminCtx, ok := tenantCtxCache[r.TenantID]
+		if !ok {
+			var err error
+			adminCtx, err = h.buildAdminCtx(ctx, r.TenantID)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", r.ID, err))
+				continue
+			}
+			tenantCtxCache[r.TenantID] = adminCtx
+		}
+		if _, err := h.kgService.ReparseKnowledge(adminCtx, r.ID); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", r.ID, err))
+			continue
+		}
+		queued++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"queued": queued,
+		"errors": errs,
+		"total":  len(rows),
+	})
 }
 
 // ServeUI serves the monitoring HTML page.
