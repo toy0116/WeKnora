@@ -55,7 +55,10 @@ const (
 	// wikiMaxDocsPerBatch limits how many documents a single batch processes.
 	// Prevents unbounded execution time. Remaining docs stay in the pending list
 	// and are picked up by the follow-up task.
-	wikiMaxDocsPerBatch = 5
+	// Raised 5→10: halves the number of batches per KB, ~2x throughput.
+	// Safe because the heartbeat renewer keeps the per-KB Redis lock alive for
+	// the full batch duration regardless of size.
+	wikiMaxDocsPerBatch = 10
 
 	// wikiFailCountKeyPrefix is the Redis key prefix for per-document failure
 	// counters. Key: wiki:failcount:{kbID}:{knowledgeID} → integer.
