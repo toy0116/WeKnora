@@ -34,10 +34,11 @@ const (
 	IndirectRelationWeightDecay = 0.5
 
 	// MaxConcurrentEntityExtractions Maximum concurrency for entity extraction
-	MaxConcurrentEntityExtractions = 4
+	// (per chunk:extract task · 每个 task 内 goroutine 上限)
+	MaxConcurrentEntityExtractions = 6
 
 	// MaxConcurrentRelationExtractions Maximum concurrency for relationship extraction
-	MaxConcurrentRelationExtractions = 4
+	MaxConcurrentRelationExtractions = 6
 
 	// DefaultRelationBatchSize Default batch size for relationship extraction
 	DefaultRelationBatchSize = 5

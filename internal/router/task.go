@@ -86,10 +86,16 @@ func NewAsynqServer() *asynq.Server {
 	srv := asynq.NewServer(
 		opt,
 		asynq.Config{
+			// Concurrency: LLM/embedding 调用全是 I/O bound（等 API 响应），
+			// 设为 CPU 核数的 2 倍可大幅提升吞吐，不增加 CPU 负担。
+			Concurrency: 16,
+			// 队列权重：chunk:extract / wiki:ingest / summary / question 全在 low 队列。
+			// 原始权重 low:1 导致 pipeline 只能获得约 0.8 个 worker（严重瓶颈）。
+			// 反转权重后 low 队列获得 ~10 个 worker，吞吐提升 ~10x。
 			Queues: map[string]int{
-				"critical": 6, // Highest priority queue
-				"default":  3, // Default priority queue
-				"low":      1, // Lowest priority queue
+				"critical": 2, // 实时对话/紧急任务（低并发）
+				"default":  2, // document:process（同时最多 2 个大文档在解析）
+				"low":      6, // chunk:extract + wiki:ingest — pipeline 主力
 			},
 			RetryDelayFunc: asynqRetryDelayFunc,
 		},
