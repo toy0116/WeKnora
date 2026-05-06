@@ -298,8 +298,9 @@ func RegisterKnowledgeBaseRoutes(r *gin.RouterGroup, handler *handler.KnowledgeB
 		kb.DELETE("/:id", handler.DeleteKnowledgeBase)
 		// 置顶/取消置顶知识库
 		kb.PUT("/:id/pin", handler.TogglePinKnowledgeBase)
-		// 混合搜索
+		// 混合搜索（GET 保持兼容；POST 供 MCP bridge 传 JSON body）
 		kb.GET("/:id/hybrid-search", handler.HybridSearch)
+		kb.POST("/:id/hybrid-search", handler.HybridSearch)
 		// 拷贝知识库
 		kb.POST("/copy", handler.CopyKnowledgeBase)
 		// 获取知识库复制进度
