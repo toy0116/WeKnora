@@ -297,6 +297,8 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	if redisAvailable {
 		must(container.Provide(handler.NewQueueMonitorHandler))
 	}
+	// Backup / export handler (always available, no external deps)
+	must(container.Provide(handler.NewBackupHandler))
 	// IM integration
 	logger.Debugf(ctx, "[Container] Registering IM integration...")
 	must(container.Provide(imPkg.NewService))

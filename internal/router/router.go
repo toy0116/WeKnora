@@ -71,6 +71,7 @@ type RouterParams struct {
 	WikiPageHandler          *handler.WikiPageHandler
 	VaultSyncHandler         *handler.VaultSyncHandler
 	QueueMonitorHandler      *handler.QueueMonitorHandler `optional:"true"`
+	BackupHandler            *handler.BackupHandler       `optional:"true"`
 }
 
 // NewRouter 创建新的路由
@@ -122,6 +123,11 @@ func NewRouter(params RouterParams) *gin.Engine {
 	// Queue monitor UI + API (local-only admin tool, no auth required)
 	if params.QueueMonitorHandler != nil {
 		RegisterQueueMonitorRoutes(r, nil, params.QueueMonitorHandler)
+	}
+
+	// Backup / export endpoints (local-only admin tool, no auth required)
+	if params.BackupHandler != nil {
+		RegisterBackupRoutes(r, params.BackupHandler)
 	}
 
 	// 认证中间件
