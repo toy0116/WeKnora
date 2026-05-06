@@ -120,6 +120,9 @@ func NewRouter(params RouterParams) *gin.Engine {
 	// IM 回调路由（在认证中间件之前注册，使用各平台自身的签名验证）
 	RegisterIMRoutes(r, params.IMHandler)
 
+	// Admin landing page — links to all sub-tools (no auth required)
+	RegisterAdminHomeRoute(r)
+
 	// Queue monitor UI + API (local-only admin tool, no auth required)
 	if params.QueueMonitorHandler != nil {
 		RegisterQueueMonitorRoutes(r, nil, params.QueueMonitorHandler)

@@ -11,6 +11,10 @@ const queueMonitorHTML = `<!DOCTYPE html>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f7; color: #1d1d1f; }
   header { background: #1d1d1f; color: #f5f5f7; padding: 16px 32px; display: flex; align-items: center; gap: 16px; }
   header h1 { font-size: 18px; font-weight: 600; }
+  header .nav-links { display: flex; gap: 4px; margin-left: 24px; }
+  header .nav-link { padding: 5px 12px; border-radius: 7px; font-size: 13px; color: #86868b; text-decoration: none; transition: background .15s; }
+  header .nav-link:hover { background: rgba(255,255,255,.12); color: #f5f5f7; }
+  header .nav-link.active { background: rgba(255,255,255,.18); color: #f5f5f7; font-weight: 600; }
   header .refresh-info { font-size: 12px; color: #86868b; margin-left: auto; }
   .container { max-width: 1200px; margin: 0 auto; padding: 24px 32px; }
 
@@ -69,7 +73,11 @@ const queueMonitorHTML = `<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>🗂 WeKnora 队列监控</h1>
+  <h1>🛠 WeKnora 管理</h1>
+  <nav class="nav-links">
+    <a class="nav-link active" href="queue">🗂 队列监控</a>
+    <a class="nav-link" href="backup">💾 备份 & 迁移</a>
+  </nav>
   <span class="refresh-info" id="refresh-info">加载中…</span>
 </header>
 

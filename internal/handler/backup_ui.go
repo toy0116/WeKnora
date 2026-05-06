@@ -12,6 +12,10 @@ const backupHTML = `<!DOCTYPE html>
   header { background: #1d1d1f; color: #f5f5f7; padding: 16px 32px; display: flex; align-items: center; gap: 16px; }
   header h1 { font-size: 18px; font-weight: 600; }
   header .subtitle { font-size: 13px; color: #86868b; margin-left: 8px; }
+  header .nav-links { display: flex; gap: 4px; margin-left: 24px; }
+  header .nav-link { padding: 5px 12px; border-radius: 7px; font-size: 13px; color: #86868b; text-decoration: none; transition: background .15s; }
+  header .nav-link:hover { background: rgba(255,255,255,.12); color: #f5f5f7; }
+  header .nav-link.active { background: rgba(255,255,255,.18); color: #f5f5f7; font-weight: 600; }
   .container { max-width: 960px; margin: 0 auto; padding: 28px 32px; }
 
   /* status bar */
@@ -82,8 +86,11 @@ const backupHTML = `<!DOCTYPE html>
 <body>
 
 <header>
-  <h1>💾 WeKnora 备份 & 迁移</h1>
-  <span class="subtitle">数据库 · 文件存储 · 配置导出</span>
+  <h1>🛠 WeKnora 管理</h1>
+  <nav class="nav-links">
+    <a class="nav-link" href="queue">🗂 队列监控</a>
+    <a class="nav-link active" href="backup">💾 备份 & 迁移</a>
+  </nav>
 </header>
 
 <div class="container">

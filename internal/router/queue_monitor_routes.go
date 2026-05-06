@@ -5,6 +5,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// RegisterAdminHomeRoute mounts a simple landing page at GET /admin that
+// links to all admin sub-tools (queue monitor, backup, etc.).
+func RegisterAdminHomeRoute(r *gin.Engine) {
+	r.GET("/admin", handler.ServeAdminHome)
+}
+
 // RegisterQueueMonitorRoutes mounts the queue monitoring UI and API.
 // All routes are intentionally outside the auth middleware — this is a
 // local-only admin tool accessible only on 127.0.0.1.
