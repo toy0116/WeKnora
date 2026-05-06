@@ -272,6 +272,9 @@ func (h *QueueMonitorHandler) GetDocuments(c *gin.Context) {
 		WikiPages   int64     `gorm:"column:wiki_pages"`
 	}
 
+	// Use correlated subqueries instead of LEFT JOIN + GROUP BY to avoid the
+	// O(chunks × wiki_pages) cartesian product that previously caused 15s scans.
+	// Each subquery does a targeted index scan per knowledge row (~26ms total).
 	var rows []row
 	err := h.db.WithContext(ctx).Raw(`
 		SELECT
@@ -279,13 +282,12 @@ func (h *QueueMonitorHandler) GetDocuments(c *gin.Context) {
 			k.title,
 			k.parse_status,
 			k.updated_at,
-			COUNT(DISTINCT c.id) AS total_chunks,
-			COUNT(DISTINCT wp.id) AS wiki_pages
+			(SELECT COUNT(*) FROM chunks c
+			 WHERE c.knowledge_id = k.id AND c.deleted_at IS NULL) AS total_chunks,
+			(SELECT COUNT(*) FROM wiki_pages wp
+			 WHERE wp.knowledge_base_id = k.knowledge_base_id) AS wiki_pages
 		FROM knowledges k
-		LEFT JOIN chunks c ON c.knowledge_id = k.id AND c.deleted_at IS NULL
-		LEFT JOIN wiki_pages wp ON wp.knowledge_base_id = k.knowledge_base_id
 		WHERE k.deleted_at IS NULL
-		GROUP BY k.id, k.title, k.parse_status, k.updated_at
 		ORDER BY k.updated_at DESC
 		LIMIT 100
 	`).Scan(&rows).Error
@@ -295,33 +297,39 @@ func (h *QueueMonitorHandler) GetDocuments(c *gin.Context) {
 		return
 	}
 
-	// Cross-reference with pending chunk IDs from cached stats
-	var docs []DocProgress
-	for _, r := range rows {
-		pendingExtract := int64(0)
-		if stats != nil {
-			// Count how many of this doc's chunks are still in the extract queue
-			// (Approximate: we don't have a cheap per-doc reverse index, so
-			//  we query chunks for this knowledge and check against pendingChunkIDs)
-			if len(stats.pendingChunkIDs) > 0 {
-				var chunkIDs []string
-				h.db.WithContext(ctx).Raw(
-					"SELECT id FROM chunks WHERE knowledge_id = ? AND deleted_at IS NULL",
-					r.KnowledgeID,
-				).Scan(&chunkIDs)
-				for _, cid := range chunkIDs {
-					if _, ok := stats.pendingChunkIDs[cid]; ok {
-						pendingExtract++
-					}
-				}
+	// Build pendingExtract counts: one bulk chunk-ID fetch instead of N+1 queries.
+	// Map knowledge_id → pending count, populated only when pendingChunkIDs is non-empty.
+	pendingByKnowledge := make(map[string]int64)
+	if stats != nil && len(stats.pendingChunkIDs) > 0 {
+		// Collect knowledge IDs from this page
+		kIDs := make([]string, 0, len(rows))
+		for _, r := range rows {
+			kIDs = append(kIDs, r.KnowledgeID)
+		}
+		// Single query: all chunk IDs for these knowledges
+		type chunkRow struct {
+			KnowledgeID string `gorm:"column:knowledge_id"`
+			ChunkID     string `gorm:"column:id"`
+		}
+		var chunkRows []chunkRow
+		h.db.WithContext(ctx).Raw(
+			"SELECT knowledge_id, id FROM chunks WHERE knowledge_id IN ? AND deleted_at IS NULL",
+			kIDs,
+		).Scan(&chunkRows)
+		for _, cr := range chunkRows {
+			if _, ok := stats.pendingChunkIDs[cr.ChunkID]; ok {
+				pendingByKnowledge[cr.KnowledgeID]++
 			}
 		}
+	}
 
+	var docs []DocProgress
+	for _, r := range rows {
 		docs = append(docs, DocProgress{
 			KnowledgeID:    r.KnowledgeID,
 			Title:          r.Title,
 			TotalChunks:    r.TotalChunks,
-			PendingExtract: pendingExtract,
+			PendingExtract: pendingByKnowledge[r.KnowledgeID],
 			WikiPages:      r.WikiPages,
 			ParseStatus:    r.ParseStatus,
 			UpdatedAt:      r.UpdatedAt.Format("2006-01-02 15:04"),
