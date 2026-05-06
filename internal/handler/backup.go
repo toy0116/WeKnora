@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -338,4 +339,72 @@ func redactYAML(content string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// ── Status ────────────────────────────────────────────────────────────────────
+
+// backupStatus is the JSON shape returned by Status.
+type backupStatus struct {
+	DBDriver     string `json:"db_driver"`
+	DBHost       string `json:"db_host"`
+	DBPort       string `json:"db_port"`
+	DBName       string `json:"db_name"`
+	PgDumpPath   string `json:"pg_dump_path"`
+	PgDumpOK     bool   `json:"pg_dump_ok"`
+	StorageDir   string `json:"storage_dir"`
+	StorageSizeB int64  `json:"storage_size_bytes"`
+	StorageSizeMB float64 `json:"storage_size_mb"`
+	StorageOK    bool   `json:"storage_ok"`
+}
+
+// dirSize returns the total byte size of all regular files under root.
+func dirSize(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, e := d.Info(); e == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// Status returns a JSON summary used by the backup UI to show current state.
+func (h *BackupHandler) Status(c *gin.Context) {
+	pgPath, pgErr := findPgDump()
+	storageDir := strings.TrimSpace(os.Getenv("LOCAL_STORAGE_BASE_DIR"))
+
+	var storageSizeB int64
+	storageOK := false
+	if storageDir != "" {
+		if info, err := os.Stat(storageDir); err == nil && info.IsDir() {
+			storageOK = true
+			storageSizeB = dirSize(storageDir)
+		}
+	}
+
+	status := backupStatus{
+		DBDriver:      os.Getenv("DB_DRIVER"),
+		DBHost:        os.Getenv("DB_HOST"),
+		DBPort:        os.Getenv("DB_PORT"),
+		DBName:        os.Getenv("DB_NAME"),
+		PgDumpPath:    pgPath,
+		PgDumpOK:      pgErr == nil,
+		StorageDir:    storageDir,
+		StorageSizeB:  storageSizeB,
+		StorageSizeMB: float64(storageSizeB) / 1024 / 1024,
+		StorageOK:     storageOK,
+	}
+	c.JSON(http.StatusOK, status)
+}
+
+// ── Web UI ────────────────────────────────────────────────────────────────────
+
+// ServeUI serves the backup management HTML page.
+func (h *BackupHandler) ServeUI(c *gin.Context) {
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, backupHTML)
 }
