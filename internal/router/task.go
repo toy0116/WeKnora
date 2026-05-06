@@ -1,17 +1,21 @@
 package router
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/application/service"
+	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/dig"
 )
 
@@ -103,7 +107,117 @@ func NewAsynqServer() *asynq.Server {
 	return srv
 }
 
+// buildRedisClientForReclaim creates a short-lived redis.Client using the same
+// connection parameters as the asynq server. Returns nil when Redis is not
+// configured (Lite mode) so callers can skip reclaim gracefully.
+func buildRedisClientForReclaim() *redis.Client {
+	addr := os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		return nil // Lite mode — no Redis, no reclaim needed
+	}
+	db := 0
+	if dbStr := os.Getenv("REDIS_DB"); dbStr != "" {
+		if parsed, err := strconv.Atoi(dbStr); err == nil {
+			db = parsed
+		}
+	}
+	rc := redis.NewClient(&redis.Options{
+		Addr:     addr,
+		Username: os.Getenv("REDIS_USERNAME"),
+		Password: os.Getenv("REDIS_PASSWORD"),
+		DB:       db,
+	})
+	if err := rc.Ping(context.Background()).Err(); err != nil {
+		logger.Warnf(context.Background(), "[Asynq] Redis ping failed during startup reclaim: %v", err)
+		_ = rc.Close()
+		return nil
+	}
+	return rc
+}
+
+// reclaimStaleAsynqTasks recovers tasks that were left in the "active" list
+// when a previous server instance crashed or was forcibly killed.
+//
+// Background: asynq marks a task active when a worker dequeues it. On a clean
+// shutdown the worker re-queues in-flight tasks via SIGTERM handling. On a
+// crash or SIGKILL, no cleanup runs — tasks stay in the active list forever
+// and are never retried unless explicitly reclaimed.
+//
+// This function runs synchronously at startup (before any worker goroutine
+// accepts new work) so there is no race with live workers.
+//
+// For each active task we distinguish three cases:
+//   - Real task (msg field present, len > 0): move back to pending so it gets
+//     retried with a fresh attempt count.
+//   - Ghost entry (msg field absent / zero-length): the task data TTL already
+//     expired; just remove the dangling ID from the active list.
+//
+// Queues are processed in reverse-priority order so higher-priority queues
+// drain into pending first.
+func reclaimStaleAsynqTasks(ctx context.Context, rc *redis.Client) {
+	queues := []string{"low", "default", "critical"}
+	totalReclaimed, totalGhosts := 0, 0
+
+	for _, q := range queues {
+		activeKey := fmt.Sprintf("asynq:{%s}:active", q)
+		pendingKey := fmt.Sprintf("asynq:{%s}:pending", q)
+
+		ids, err := rc.LRange(ctx, activeKey, 0, -1).Result()
+		if err != nil || len(ids) == 0 {
+			continue
+		}
+
+		reclaimed, ghosts := 0, 0
+		for _, id := range ids {
+			taskKey := fmt.Sprintf("asynq:{%s}:t:%s", q, id)
+
+			// Check whether the task still has its message payload.
+			// A hash with only the "state" key (len==1) is a ghost.
+			fields, herr := rc.HLen(ctx, taskKey).Result()
+			if herr != nil {
+				continue
+			}
+
+			if fields <= 1 {
+				// Ghost: payload TTL expired; just remove from active list.
+				_ = rc.LRem(ctx, activeKey, 0, id).Err()
+				ghosts++
+				continue
+			}
+
+			// Real task: move back to pending atomically.
+			pipe := rc.Pipeline()
+			pipe.LRem(ctx, activeKey, 1, id)
+			pipe.HSet(ctx, taskKey, "state", "pending")
+			pipe.RPush(ctx, pendingKey, id)
+			if _, err := pipe.Exec(ctx); err == nil {
+				reclaimed++
+			}
+		}
+
+		if reclaimed+ghosts > 0 {
+			logger.Infof(ctx, "[Asynq] queue=%s reclaimed=%d ghost_removed=%d", q, reclaimed, ghosts)
+		}
+		totalReclaimed += reclaimed
+		totalGhosts += ghosts
+	}
+
+	if totalReclaimed+totalGhosts > 0 {
+		logger.Infof(ctx, "[Asynq] Startup reclaim complete: tasks_recovered=%d ghost_entries_removed=%d",
+			totalReclaimed, totalGhosts)
+	}
+}
+
 func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
+	// Reclaim any tasks that were left in the "active" list by a previous
+	// crashed/killed server instance. This must run before workers start so
+	// there is no race between reclaim and live task processing.
+	if rc := buildRedisClientForReclaim(); rc != nil {
+		reclaimCtx := context.Background()
+		reclaimStaleAsynqTasks(reclaimCtx, rc)
+		_ = rc.Close()
+	}
+
 	// Create a new mux and register all handlers
 	mux := asynq.NewServeMux()
 

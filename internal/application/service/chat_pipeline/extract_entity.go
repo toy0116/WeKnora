@@ -190,6 +190,18 @@ func (e *Extractor) Extract(ctx context.Context, content string) (*types.GraphDa
 		return nil, err
 	}
 
+	// Detect max-tokens truncation: the model ran out of output budget before
+	// finishing the JSON.  The resulting content is necessarily malformed, so
+	// ParseGraph will always fail for this chunk regardless of how many times
+	// we retry — retrying only wastes tokens and floods the queue.
+	// Return an empty (but non-error) graph so the task completes cleanly.
+	if chatResponse.FinishReason == "length" {
+		logger.Warnf(ctx, "Graph extraction output truncated (finish_reason=length, "+
+			"completion_tokens=%d, max_tokens=%d): skipping this chunk, empty graph stored",
+			chatResponse.Usage.CompletionTokens, e.chatOpt.MaxTokens)
+		return &types.GraphData{}, nil
+	}
+
 	graph, err := e.formater.ParseGraph(ctx, chatResponse.Content)
 	if err != nil {
 		logger.Errorf(ctx, "failed to parse graph: %v", err)
@@ -390,7 +402,13 @@ func (f *Formater) parseOutput(ctx context.Context, text string) ([]map[string]i
 		err = json.Unmarshal([]byte(content), &parsed)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse %s content: %s", strings.ToUpper(string(f.formatType)), err.Error())
+		// JSON unmarshal failed — most likely the LLM output was truncated
+		// mid-way (e.g. hit max_tokens without a finish_reason=="length" signal,
+		// or returned partial content).  Retrying an inherently malformed output
+		// produces the same failure, so treat it as an empty extraction rather
+		// than propagating an error that would burn retries and archive the task.
+		logger.Warnf(ctx, "Graph extraction JSON unparseable (possibly truncated output): %v — treating as empty graph", err)
+		return nil, nil
 	}
 	if parsed == nil {
 		return nil, fmt.Errorf("content must be a list of extractions or a dict")
