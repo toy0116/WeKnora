@@ -2615,6 +2615,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	llmCallFailed := 0
 	llmCallEmpty := 0
 	llmCallSkipped := 0 // chunks whose questions were already stored (retry after index failure)
+	indexAlreadySkipped := 0 // question entries already in vector store (skip re-embedding on retry)
 	generatedQuestionsTotal := 0
 	chunkMetadataSetFailed := 0
 	chunkUpdateFailed := 0
@@ -2624,7 +2625,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	defer func() {
 		logger.Infof(
 			ctx,
-			"Question generation stats: knowledge=%s kb=%s retry=%d/%d status=%s elapsed=%s chunks(total=%d,text=%d,empty_text=%d) llm(attempt=%d,success=%d,empty=%d,failed=%d,skipped=%d) generated_questions=%d chunk_update_failed=%d metadata_set_failed=%d index(prepared=%d,attempted=%v,succeeded=%v)",
+			"Question generation stats: knowledge=%s kb=%s retry=%d/%d status=%s elapsed=%s chunks(total=%d,text=%d,empty_text=%d) llm(attempt=%d,success=%d,empty=%d,failed=%d,skipped=%d) generated_questions=%d chunk_update_failed=%d metadata_set_failed=%d index(prepared=%d,already_skipped=%d,attempted=%v,succeeded=%v)",
 			payload.KnowledgeID,
 			payload.KnowledgeBaseID,
 			retryCount,
@@ -2643,6 +2644,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 			chunkUpdateFailed,
 			chunkMetadataSetFailed,
 			indexEntriesPrepared,
+			indexAlreadySkipped,
 			indexBatchAttempted,
 			indexBatchSucceeded,
 		)
@@ -2744,6 +2746,18 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 		return fmt.Errorf("failed to init retrieve engine: %w", err)
 	}
 
+	// Pre-fetch already-indexed question source_ids for this knowledge so
+	// we can skip re-embedding on retry.  A partial previous run may have
+	// successfully persisted some batches before timing out; we must not
+	// re-insert them (no unique constraint on source_id in the embeddings
+	// table, so re-inserts create duplicate rows that inflate retrieval noise).
+	// Non-fatal: if the query fails we fall back to re-indexing everything.
+	alreadyIndexed, err := retrieveEngine.GetIndexedSourceIDsByKnowledge(ctx, payload.KnowledgeID)
+	if err != nil {
+		logger.Warnf(ctx, "GetIndexedSourceIDsByKnowledge failed (will re-index all): %v", err)
+		alreadyIndexed = make(map[string]struct{})
+	}
+
 	questionCount := payload.QuestionCount
 	if questionCount <= 0 {
 		questionCount = 3
@@ -2776,15 +2790,22 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 		}
 
 		// Fast path: if questions were already generated and stored (e.g. on a
-		// retry after an index failure), skip the LLM call and just rebuild the
-		// index entries from the persisted metadata. This avoids re-spending LLM
-		// tokens when only the embedding/indexing step failed previously.
+		// retry after an index failure), skip the LLM call and rebuild index
+		// entries from the persisted metadata.  Additionally skip any entries
+		// whose source_id is already present in the vector store so retries
+		// are fully idempotent and don't create duplicate embeddings.
 		if existingMeta, err := chunk.DocumentMetadata(); err == nil &&
 			existingMeta != nil && len(existingMeta.GeneratedQuestions) > 0 {
 			llmCallSkipped++
 			generatedQuestionsTotal += len(existingMeta.GeneratedQuestions)
+			allIndexed := true
 			for _, gq := range existingMeta.GeneratedQuestions {
 				sourceID := fmt.Sprintf("%s-%s", chunk.ID, gq.ID)
+				if _, done := alreadyIndexed[sourceID]; done {
+					indexAlreadySkipped++
+					continue // this question is already in the vector store
+				}
+				allIndexed = false
 				indexInfoList = append(indexInfoList, &types.IndexInfo{
 					Content:         gq.Question,
 					SourceID:        sourceID,
@@ -2795,7 +2816,12 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 					IsEnabled:       true,
 				})
 			}
-			logger.Debugf(ctx, "Reusing %d cached questions for chunk %s (skip LLM)", len(existingMeta.GeneratedQuestions), chunk.ID)
+			if allIndexed {
+				logger.Debugf(ctx, "Chunk %s fully indexed already (skip LLM+embed)", chunk.ID)
+			} else {
+				logger.Debugf(ctx, "Reusing %d cached questions for chunk %s (skip LLM, %d already indexed)",
+					len(existingMeta.GeneratedQuestions), chunk.ID, indexAlreadySkipped)
+			}
 			continue
 		}
 
@@ -2865,13 +2891,32 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	}
 	indexEntriesPrepared = len(indexInfoList)
 
-	// Index generated questions
+	// Index generated questions in sub-batches.
+	//
+	// Why chunked instead of one giant call?
+	// BatchEmbedWithPool sends ALL content in a single HTTP request to the
+	// embedder.  With 1 500+ questions that request can take >30 minutes when
+	// the embedder is under load from concurrent tasks, consistently hitting
+	// the asynq task deadline.  Splitting into 200-question sub-batches means
+	// each embedding call takes ~2 minutes; a timeout in one sub-batch only
+	// fails the remaining work, and the next retry skips already-indexed
+	// entries (via alreadyIndexed above) so no duplicates are created.
+	const questionIndexBatchSize = 200
 	if len(indexInfoList) > 0 {
 		indexBatchAttempted = true
-		if err := retrieveEngine.BatchIndex(ctx, embeddingModel, indexInfoList); err != nil {
-			exitStatus = "index_questions_failed"
-			logger.Errorf(ctx, "Failed to index generated questions: %v", err)
-			return fmt.Errorf("failed to index questions: %w", err)
+		totalBatches := (len(indexInfoList) + questionIndexBatchSize - 1) / questionIndexBatchSize
+		for batchIdx := range totalBatches {
+			start := batchIdx * questionIndexBatchSize
+			end := min(start+questionIndexBatchSize, len(indexInfoList))
+			batch := indexInfoList[start:end]
+			if err := retrieveEngine.BatchIndex(ctx, embeddingModel, batch); err != nil {
+				exitStatus = "index_questions_failed"
+				logger.Errorf(ctx, "Failed to index question batch [%d/%d] (%d entries): %v",
+					batchIdx+1, totalBatches, len(batch), err)
+				return fmt.Errorf("failed to index questions batch %d/%d: %w", batchIdx+1, totalBatches, err)
+			}
+			logger.Infof(ctx, "Indexed question batch [%d/%d] (%d entries) for knowledge %s",
+				batchIdx+1, totalBatches, len(batch), payload.KnowledgeID)
 		}
 		indexBatchSucceeded = true
 		logger.Infof(ctx, "Successfully indexed %d generated questions for knowledge: %s", len(indexInfoList), payload.KnowledgeID)

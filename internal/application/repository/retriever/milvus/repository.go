@@ -1142,3 +1142,9 @@ func convertResultSet(resultSet []client.ResultSet) ([]*MilvusVectorEmbeddingWit
 	}
 	return docs, scores, nil
 }
+// GetIndexedSourceIDsByKnowledge returns an empty set for the milvusRepository engine.
+// Question-generation is only run against the primary (postgres/sqlite)
+// engine; this method exists to satisfy the RetrieveEngineRepository interface.
+func (r *milvusRepository) GetIndexedSourceIDsByKnowledge(_ context.Context, _ string) (map[string]struct{}, error) {
+	return make(map[string]struct{}), nil
+}

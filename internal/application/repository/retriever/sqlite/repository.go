@@ -261,6 +261,27 @@ func (r *sqliteRepository) BatchUpdateChunkTagID(ctx context.Context, chunkTagMa
 	return nil
 }
 
+// GetIndexedSourceIDsByKnowledge returns the set of question source_ids
+// already stored for the given knowledgeID (SQLite mode).
+// Because sqliteEmbedding has a unique index on (source_id, source_type),
+// re-inserting is already idempotent — but returning the existing set
+// allows the question-generation pipeline to skip the embedding call
+// entirely, saving time on retries.
+func (r *sqliteRepository) GetIndexedSourceIDsByKnowledge(_ context.Context, knowledgeID string) (map[string]struct{}, error) {
+	var sourceIDs []string
+	err := r.db.Model(&sqliteEmbedding{}).
+		Where("knowledge_id = ? AND length(source_id) > 36", knowledgeID).
+		Pluck("source_id", &sourceIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]struct{}, len(sourceIDs))
+	for _, id := range sourceIDs {
+		set[id] = struct{}{}
+	}
+	return set, nil
+}
+
 // --- Retrieve ---
 
 func (r *sqliteRepository) Retrieve(ctx context.Context, params types.RetrieveParams) ([]*types.RetrieveResult, error) {

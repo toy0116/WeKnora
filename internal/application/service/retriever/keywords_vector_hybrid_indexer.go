@@ -328,3 +328,12 @@ func (v *KeywordsVectorHybridRetrieveEngineService) BatchUpdateChunkTagID(
 ) error {
 	return v.indexRepository.BatchUpdateChunkTagID(ctx, chunkTagMap)
 }
+
+// GetIndexedSourceIDsByKnowledge returns already-indexed question source_ids
+// for the given knowledge, forwarded directly to the storage repository.
+func (v *KeywordsVectorHybridRetrieveEngineService) GetIndexedSourceIDsByKnowledge(
+	ctx context.Context,
+	knowledgeID string,
+) (map[string]struct{}, error) {
+	return v.indexRepository.GetIndexedSourceIDsByKnowledge(ctx, knowledgeID)
+}

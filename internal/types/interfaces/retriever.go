@@ -60,6 +60,12 @@ type RetrieveEngineRepository interface {
 	// chunkTagMap: map of chunk ID to tag ID (empty string means no tag)
 	BatchUpdateChunkTagID(ctx context.Context, chunkTagMap map[string]string) error
 
+	// GetIndexedSourceIDsByKnowledge returns the set of source_ids that are
+	// already present in the index for the given knowledgeID.  Used by
+	// question-generation to skip re-embedding entries that survived a
+	// previous partial run (avoids both duplicate rows and timeout loops).
+	GetIndexedSourceIDsByKnowledge(ctx context.Context, knowledgeID string) (map[string]struct{}, error)
+
 	// RetrieveEngine retrieves the engine
 	RetrieveEngine
 }
@@ -126,6 +132,11 @@ type RetrieveEngineService interface {
 	// BatchUpdateChunkTagID updates the tag ID of chunks in batch
 	// chunkTagMap: map of chunk ID to tag ID (empty string means no tag)
 	BatchUpdateChunkTagID(ctx context.Context, chunkTagMap map[string]string) error
+
+	// GetIndexedSourceIDsByKnowledge returns the set of source_ids already in
+	// the index for the given knowledgeID.  See RetrieveEngineRepository for
+	// semantics.
+	GetIndexedSourceIDsByKnowledge(ctx context.Context, knowledgeID string) (map[string]struct{}, error)
 
 	// RetrieveEngine retrieves the engine
 	RetrieveEngine

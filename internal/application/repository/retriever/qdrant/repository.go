@@ -984,3 +984,9 @@ func tokenizeQuery(query string) []string {
 
 	return result
 }
+// GetIndexedSourceIDsByKnowledge returns an empty set for the qdrantRepository engine.
+// Question-generation is only run against the primary (postgres/sqlite)
+// engine; this method exists to satisfy the RetrieveEngineRepository interface.
+func (r *qdrantRepository) GetIndexedSourceIDsByKnowledge(_ context.Context, _ string) (map[string]struct{}, error) {
+	return make(map[string]struct{}), nil
+}

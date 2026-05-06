@@ -314,6 +314,36 @@ func (c *CompositeRetrieveEngine) DeleteByKnowledgeIDList(ctx context.Context,
 	})
 }
 
+// GetIndexedSourceIDsByKnowledge returns the union of already-indexed
+// question source_ids across all registered retrieval engines.
+// On retry, question-generation uses this set to skip re-embedding entries
+// that were successfully persisted in a previous (partial) run.
+func (c *CompositeRetrieveEngine) GetIndexedSourceIDsByKnowledge(
+	ctx context.Context,
+	knowledgeID string,
+) (map[string]struct{}, error) {
+	var mu sync.Mutex
+	union := make(map[string]struct{})
+
+	err := c.concurrentExecWithError(ctx, func(ctx context.Context, engineInfo *engineInfo) error {
+		ids, err := engineInfo.retrieveEngine.GetIndexedSourceIDsByKnowledge(ctx, knowledgeID)
+		if err != nil {
+			// Non-fatal: log and continue so a partial result is returned.
+			logger.Warnf(ctx, "[CompositeEngine] GetIndexedSourceIDsByKnowledge engine=%s err=%v",
+				engineInfo.retrieveEngine.EngineType(), err)
+			return nil
+		}
+		mu.Lock()
+		maps.Copy(union, ids)
+		mu.Unlock()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return union, nil
+}
+
 // EstimateStorageSize estimates the storage size required for the provided index information
 func (c *CompositeRetrieveEngine) EstimateStorageSize(ctx context.Context,
 	embedder embedding.Embedder, indexInfoList []*types.IndexInfo,

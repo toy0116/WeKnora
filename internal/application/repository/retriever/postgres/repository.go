@@ -119,6 +119,26 @@ func (g *pgRepository) DeleteByChunkIDList(ctx context.Context, chunkIDList []st
 	return nil
 }
 
+// GetIndexedSourceIDsByKnowledge returns the set of source_ids currently
+// indexed for the given knowledgeID.  Question-generation source_ids are
+// longer than a plain UUID (format: "<chunkUUID>-<questionID>"), so a
+// length filter of > 36 isolates them from bare chunk embeddings.
+func (g *pgRepository) GetIndexedSourceIDsByKnowledge(ctx context.Context, knowledgeID string) (map[string]struct{}, error) {
+	var sourceIDs []string
+	err := g.db.WithContext(ctx).
+		Model(&pgVector{}).
+		Where("knowledge_id = ? AND length(source_id) > 36", knowledgeID).
+		Pluck("source_id", &sourceIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]struct{}, len(sourceIDs))
+	for _, id := range sourceIDs {
+		set[id] = struct{}{}
+	}
+	return set, nil
+}
+
 // DeleteBySourceIDList deletes indices by source IDs
 func (g *pgRepository) DeleteBySourceIDList(ctx context.Context, sourceIDList []string, dimension int, knowledgeType string) error {
 	if len(sourceIDList) == 0 {

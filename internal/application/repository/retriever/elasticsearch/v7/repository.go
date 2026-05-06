@@ -1450,3 +1450,9 @@ func (e *elasticsearchRepository) BatchUpdateChunkTagID(
 	log.Infof("[ElasticsearchV7] Successfully batch updated chunk tag ID")
 	return nil
 }
+// GetIndexedSourceIDsByKnowledge returns an empty set for the elasticsearchRepository engine.
+// Question-generation is only run against the primary (postgres/sqlite)
+// engine; this method exists to satisfy the RetrieveEngineRepository interface.
+func (r *elasticsearchRepository) GetIndexedSourceIDsByKnowledge(_ context.Context, _ string) (map[string]struct{}, error) {
+	return make(map[string]struct{}), nil
+}
