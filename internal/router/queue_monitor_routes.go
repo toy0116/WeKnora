@@ -1,14 +1,24 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/Tencent/WeKnora/internal/handler"
 	"github.com/gin-gonic/gin"
 )
 
 // RegisterAdminHomeRoute mounts a simple landing page at GET /admin that
 // links to all admin sub-tools (queue monitor, backup, etc.).
+// Also registers /queue shortcut → /admin/queue.
 func RegisterAdminHomeRoute(r *gin.Engine) {
 	r.GET("/admin", handler.ServeAdminHome)
+	// Friendly shortcut: /queue → /admin/queue (UI + all API sub-paths)
+	r.GET("/queue", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/admin/queue")
+	})
+	r.GET("/queue/*path", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/admin/queue"+c.Param("path"))
+	})
 }
 
 // RegisterQueueMonitorRoutes mounts the queue monitoring UI and API.

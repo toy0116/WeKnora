@@ -88,8 +88,8 @@ const backupHTML = `<!DOCTYPE html>
 <header>
   <h1>🛠 WeKnora 管理</h1>
   <nav class="nav-links">
-    <a class="nav-link" href="queue">🗂 队列监控</a>
-    <a class="nav-link active" href="backup">💾 备份 & 迁移</a>
+    <a class="nav-link" id="nav-queue">🗂 队列监控</a>
+    <a class="nav-link active" id="nav-backup">💾 备份 & 迁移</a>
   </nav>
 </header>
 
@@ -225,6 +225,10 @@ const backupHTML = `<!DOCTYPE html>
 <script>
 const _base = window.location.pathname.replace(/\/admin\/backup.*$/, '');
 const API = _base + '/admin/backup';
+// Wire nav links with absolute paths so they work regardless of how this
+// page was reached (direct port, LocalHub proxy, redirect from /backup, etc.)
+document.getElementById('nav-queue').href  = _base + '/admin/queue';
+document.getElementById('nav-backup').href = _base + '/admin/backup';
 
 function toast(msg, dur = 2800) {
   const el = document.getElementById('toast');

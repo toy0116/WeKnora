@@ -55,14 +55,14 @@ const adminHomeHTML = `<!DOCTYPE html>
 <main>
   <h2>工具</h2>
   <div class="cards">
-    <a class="card" href="admin/queue">
+    <a class="card" id="link-queue">
       <div class="card-icon">🗂</div>
       <div class="card-body">
         <div class="card-title">队列监控</div>
         <div class="card-desc">查看待处理任务、文档解析进度、失败任务重入队</div>
       </div>
     </a>
-    <a class="card" href="admin/backup">
+    <a class="card" id="link-backup">
       <div class="card-icon">💾</div>
       <div class="card-body">
         <div class="card-title">备份 & 迁移</div>
@@ -72,5 +72,10 @@ const adminHomeHTML = `<!DOCTYPE html>
   </div>
 </main>
 <footer>WeKnora Admin · 本地服务</footer>
+<script>
+const _base = window.location.pathname.replace(/\/admin.*$/, '');
+document.getElementById('link-queue').href  = _base + '/admin/queue';
+document.getElementById('link-backup').href = _base + '/admin/backup';
+</script>
 </body>
 </html>`

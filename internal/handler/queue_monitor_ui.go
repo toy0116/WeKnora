@@ -74,9 +74,9 @@ const queueMonitorHTML = `<!DOCTYPE html>
 <body>
 <header>
   <h1>🛠 WeKnora 管理</h1>
-  <nav class="nav-links">
-    <a class="nav-link active" href="queue">🗂 队列监控</a>
-    <a class="nav-link" href="backup">💾 备份 & 迁移</a>
+  <nav class="nav-links" id="nav-links">
+    <a class="nav-link active" id="nav-queue">🗂 队列监控</a>
+    <a class="nav-link" id="nav-backup">💾 备份 & 迁移</a>
   </nav>
   <span class="refresh-info" id="refresh-info">加载中…</span>
 </header>
@@ -134,6 +134,10 @@ const queueMonitorHTML = `<!DOCTYPE html>
 // accessed directly (port 3120) or via LocalHub proxy (/app/weknora/admin/queue).
 const _base = window.location.pathname.replace(/\/admin\/queue.*$/, '');
 const API = _base + '/admin/queue/api';
+// Wire nav links with absolute paths so they work regardless of how this
+// page was reached (direct port, LocalHub proxy, redirect from /queue, etc.)
+document.getElementById('nav-queue').href  = _base + '/admin/queue';
+document.getElementById('nav-backup').href = _base + '/admin/backup';
 let selectedTaskIDs = new Set();
 
 // ── tab switch ────────────────────────────────────────────────────────────────

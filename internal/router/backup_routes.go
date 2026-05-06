@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/Tencent/WeKnora/internal/handler"
 	"github.com/gin-gonic/gin"
 )
@@ -14,7 +16,12 @@ import (
 //	GET /admin/backup/database  — dump the database (pg_dump .sql.gz or SQLite .db)
 //	GET /admin/backup/files     — archive LOCAL_STORAGE_BASE_DIR (.tar.gz)
 //	GET /admin/backup/config    — export non-secret runtime configuration (.json)
+//
+// Shortcut aliases (redirect to canonical paths):
+//
+//	GET /backup  →  /admin/backup
 func RegisterBackupRoutes(r *gin.Engine, h *handler.BackupHandler) {
+	// Canonical routes
 	admin := r.Group("/admin/backup")
 	{
 		admin.GET("", h.ServeUI)
@@ -23,4 +30,13 @@ func RegisterBackupRoutes(r *gin.Engine, h *handler.BackupHandler) {
 		admin.GET("/files", h.ExportFiles)
 		admin.GET("/config", h.ExportConfig)
 	}
+
+	// Friendly shortcut: /backup → /admin/backup
+	// Preserves the sub-path so /backup/database still works.
+	r.GET("/backup", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/admin/backup")
+	})
+	r.GET("/backup/*path", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/admin/backup"+c.Param("path"))
+	})
 }
