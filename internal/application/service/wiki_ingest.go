@@ -394,6 +394,7 @@ func (s *wikiIngestService) trimPendingList(ctx context.Context, kbID string, co
 func (s *wikiIngestService) requeueFailedOps(ctx context.Context, payload WikiIngestPayload, ops []WikiPendingOp) {
 	if s.redisClient != nil {
 		pendingKey := wikiPendingKeyPrefix + payload.KnowledgeBaseID
+		requeuedCount := 0
 		for _, op := range ops {
 			// Increment failure counter; drop the op permanently once it
 			// exceeds wikiMaxFailRetries to prevent unbounded queue growth
@@ -424,7 +425,33 @@ func (s *wikiIngestService) requeueFailedOps(ctx context.Context, payload WikiIn
 				logger.Warnf(ctx, "wiki ingest: failed to requeue op %s: %v", op.KnowledgeID, err)
 				continue
 			}
+			requeuedCount++
 			logger.Infof(ctx, "wiki ingest: re-queued failed op %s (%s) for retry (attempt %d/%d)", op.KnowledgeID, op.DocTitle, count, wikiMaxFailRetries)
+		}
+
+		// Schedule a follow-up asynq task to drain the pending list.
+		// Without this, re-queued ops would sit in the list indefinitely —
+		// there is no other trigger unless a new document is uploaded.
+		// One task suffices regardless of how many ops were re-queued.
+		if requeuedCount > 0 {
+			retryPayload := WikiIngestPayload{
+				TenantID:        payload.TenantID,
+				KnowledgeBaseID: payload.KnowledgeBaseID,
+				Language:        payload.Language,
+			}
+			langfuse.InjectTracing(ctx, &retryPayload)
+			retryBytes, _ := json.Marshal(retryPayload)
+			t := asynq.NewTask(types.TypeWikiIngest, retryBytes,
+				asynq.Queue("low"),
+				asynq.MaxRetry(25),
+				asynq.Timeout(60*time.Minute),
+				asynq.ProcessIn(wikiIngestDelay),
+			)
+			if _, err := s.task.Enqueue(t); err != nil {
+				logger.Warnf(ctx, "wiki ingest: failed to schedule follow-up for %d re-queued ops: %v", requeuedCount, err)
+			} else {
+				logger.Infof(ctx, "wiki ingest: scheduled follow-up task for %d re-queued ops in KB %s", requeuedCount, payload.KnowledgeBaseID)
+			}
 		}
 		return
 	}
