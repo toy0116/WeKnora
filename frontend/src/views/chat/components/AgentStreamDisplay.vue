@@ -42,7 +42,7 @@
                   </div>
                   <div v-if="event.content && isEventExpanded(event.event_id)" class="action-details">
                     <div class="thinking-detail-content markdown-content">
-                      <div v-html="renderMarkdownContent(event.content)"></div>
+                      <div v-html="renderAnswerContent(event.content)"></div>
                     </div>
                   </div>
                 </div>
