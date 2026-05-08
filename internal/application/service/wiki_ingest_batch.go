@@ -23,7 +23,12 @@ func (s *wikiIngestService) scheduleFollowUp(ctx context.Context, payload WikiIn
 		return false
 	}
 	pendingKey := wikiPendingKeyPrefix + payload.KnowledgeBaseID
-	count, err := s.redisClient.LLen(ctx, pendingKey).Result()
+	// Use background context: task ctx may be expired when this is called
+	// (e.g. just after a 60-minute timeout). A cancelled context would make
+	// LLen return an error → count == 0 → follow-up silently skipped.
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer checkCancel()
+	count, err := s.redisClient.LLen(checkCtx, pendingKey).Result()
 	if err != nil || count == 0 {
 		return false
 	}
@@ -363,6 +368,27 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		})
 	}
 	_ = eg.Wait()
+
+	// Early-bail: if every ingest op failed (e.g. LLM endpoint is completely
+	// unreachable) AND no retract ops produced slug updates, skip the Reduce
+	// phase entirely. Without this guard the task would spin for 60 minutes
+	// exhausting the asynq timeout, then fail with context.DeadlineExceeded —
+	// which, before the background-context fix above, left items in the
+	// pending list forever. With or without that fix, skipping an obviously
+	// futile Reduce saves budget and gives a faster re-schedule signal.
+	//
+	// We still call trimPendingList + requeueFailedOps so items are correctly
+	// cycled to the tail with their failure counters incremented and a follow-
+	// up task is scheduled when the LLM endpoint recovers.
+	if ingestOps > 0 && ingestFailed == ingestOps && len(slugUpdates) == 0 {
+		exitStatus = "all_ingest_failed_early_bail"
+		logger.Warnf(ctx, "wiki ingest: all %d ingest ops failed for KB %s — skipping reduce, cycling failed ops to tail", ingestOps, payload.KnowledgeBaseID)
+		s.trimPendingList(ctx, payload.KnowledgeBaseID, peekedCount)
+		if len(failedOps) > 0 {
+			s.requeueFailedOps(ctx, payload, failedOps)
+		}
+		return nil
+	}
 
 	// 2. REDUCE PHASE (Parallel upserting grouped by Slug)
 	egReduce, reduceCtx := errgroup.WithContext(ctx)

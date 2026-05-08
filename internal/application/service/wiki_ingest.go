@@ -374,12 +374,21 @@ func (s *wikiIngestService) peekPendingList(ctx context.Context, kbID string) ([
 }
 
 // trimPendingList removes the first `count` items from the Redis pending list.
+//
+// NOTE: We intentionally use a fresh background context for the Redis LTrim
+// call. The caller (ProcessWikiIngest) may pass an already-cancelled task
+// context (e.g. the 60-minute asynq timeout just fired), which would cause
+// the trim to silently fail and leave stale items in the queue forever.
 func (s *wikiIngestService) trimPendingList(ctx context.Context, kbID string, count int) {
 	if s.redisClient == nil || count <= 0 {
 		return
 	}
 	pendingKey := wikiPendingKeyPrefix + kbID
-	if err := s.redisClient.LTrim(ctx, pendingKey, int64(count), -1).Err(); err != nil {
+	// Always use a short-lived background context so an expired task context
+	// cannot turn this into a silent no-op.
+	redisCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.redisClient.LTrim(redisCtx, pendingKey, int64(count), -1).Err(); err != nil {
 		logger.Warnf(ctx, "wiki ingest: failed to trim pending list: %v", err)
 	}
 }
@@ -394,19 +403,27 @@ func (s *wikiIngestService) trimPendingList(ctx context.Context, kbID string, co
 func (s *wikiIngestService) requeueFailedOps(ctx context.Context, payload WikiIngestPayload, ops []WikiPendingOp) {
 	if s.redisClient != nil {
 		pendingKey := wikiPendingKeyPrefix + payload.KnowledgeBaseID
+
+		// Use a background context for all Redis writes below. The incoming ctx
+		// may already be cancelled (e.g. the 60-minute asynq task timeout just
+		// fired), which would silently drop every Incr/RPush and permanently
+		// strand items in the pending list without ever recording a failure.
+		redisCtx, redisCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer redisCancel()
+
 		requeuedCount := 0
 		for _, op := range ops {
 			// Increment failure counter; drop the op permanently once it
 			// exceeds wikiMaxFailRetries to prevent unbounded queue growth
 			// caused by persistent LLM timeouts or extraction errors.
 			failKey := wikiFailCountKeyPrefix + payload.KnowledgeBaseID + ":" + op.KnowledgeID
-			count, err := s.redisClient.Incr(ctx, failKey).Result()
+			count, err := s.redisClient.Incr(redisCtx, failKey).Result()
 			if err != nil {
 				logger.Warnf(ctx, "wiki ingest: failed to increment fail count for %s: %v", op.KnowledgeID, err)
 				// Fall through and requeue anyway — better to retry than silently drop
 			} else {
 				// Refresh TTL on every update so the key doesn't outlast its usefulness
-				s.redisClient.Expire(ctx, failKey, wikiPendingTTL)
+				s.redisClient.Expire(redisCtx, failKey, wikiPendingTTL)
 				if count > wikiMaxFailRetries {
 					logger.Warnf(ctx, "wiki ingest: dropping op %s (%s) after %d failures (limit %d)", op.KnowledgeID, op.DocTitle, count, wikiMaxFailRetries)
 					// Drop-path cleanup: avoid leaking stale counters that can
@@ -421,7 +438,7 @@ func (s *wikiIngestService) requeueFailedOps(ctx context.Context, payload WikiIn
 				logger.Warnf(ctx, "wiki ingest: failed to marshal op for requeue: %v", err)
 				continue
 			}
-			if err := s.redisClient.RPush(ctx, pendingKey, string(data)).Err(); err != nil {
+			if err := s.redisClient.RPush(redisCtx, pendingKey, string(data)).Err(); err != nil {
 				logger.Warnf(ctx, "wiki ingest: failed to requeue op %s: %v", op.KnowledgeID, err)
 				continue
 			}
