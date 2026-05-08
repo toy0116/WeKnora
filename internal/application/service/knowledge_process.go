@@ -2216,6 +2216,10 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		logger.Infof(ctx, "Split document into %d chunks for knowledge %s", len(chunks), knowledge.ID)
 	}
 
+	// Step 3.5: Extract document version metadata and check for duplicate versions.
+	// Non-blocking — any failure is logged and silently skipped.
+	s.extractAndStoreDocVersion(ctx, kb, knowledge, chunks)
+
 	// Step 4: Process chunks (vectorize + index + enqueue async tasks)
 	s.processChunks(ctx, kb, knowledge, chunks, processOpts)
 

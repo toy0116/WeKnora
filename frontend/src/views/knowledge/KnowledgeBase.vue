@@ -422,6 +422,27 @@ const getChannelLabel = (channel: string) => {
   return key ? t(key) : t('knowledgeBase.channelUnknown');
 };
 
+// 解析文档版本重复警告（来自后端 knowledge.Metadata._version_warning）
+const getVersionWarning = (item: any): { knowledgeId: string; title: string; version: string; currentVersion: string } | null => {
+  try {
+    const meta = item?.metadata;
+    if (!meta) return null;
+    const parsed = typeof meta === 'string' ? JSON.parse(meta) : meta;
+    const warn = parsed?._version_warning;
+    if (!warn) return null;
+    const w = typeof warn === 'string' ? JSON.parse(warn) : warn;
+    if (!w?.knowledge_id) return null;
+    return {
+      knowledgeId: w.knowledge_id,
+      title: w.title || '',
+      version: w.version || '',
+      currentVersion: w.current_version || '',
+    };
+  } catch {
+    return null;
+  }
+};
+
 // 获取知识条目的显示类型
 const getKnowledgeType = (item: any) => {
   if (item.type === 'url') {
@@ -2450,6 +2471,15 @@ async function createNewSession(value: string): Promise<void> {
                             <span class="tag-text">{{ getTagName(item.tag_id) }}</span>
                           </t-tag>
                         </div>
+                        <t-tag
+                          v-if="getVersionWarning(item)"
+                          size="small"
+                          theme="warning"
+                          variant="light"
+                          :title="`可能存在旧版本：${getVersionWarning(item)?.title || ''} v${getVersionWarning(item)?.version}`"
+                        >
+                          <t-icon name="error-circle" size="12px" style="margin-right:2px" />旧版本
+                        </t-tag>
                         <div class="card-type">
                           <span>{{ getKnowledgeType(item) }}</span>
                         </div>
@@ -2495,6 +2525,17 @@ async function createNewSession(value: string): Promise<void> {
                         <span v-if="(hoveredCardItem as any).channel && (hoveredCardItem as any).channel !== 'web'" class="card-popover-channel">{{ getChannelLabel((hoveredCardItem as any).channel) }}</span>
                         <span v-if="getTagName(hoveredCardItem.tag_id)" class="card-popover-tag">{{ getTagName(hoveredCardItem.tag_id) }}</span>
                         <span class="card-popover-type">{{ getKnowledgeType(hoveredCardItem) }}</span>
+                      </div>
+                      <div
+                        v-if="getVersionWarning(hoveredCardItem)"
+                        class="card-popover-version-warning"
+                      >
+                        <t-icon name="error-circle" size="13px" />
+                        <span>
+                          可能与旧版本重复：<strong>{{ getVersionWarning(hoveredCardItem)?.title || getVersionWarning(hoveredCardItem)?.knowledgeId }}</strong>
+                          <template v-if="getVersionWarning(hoveredCardItem)?.version">（v{{ getVersionWarning(hoveredCardItem)?.version }}）</template>
+                          <template v-if="getVersionWarning(hoveredCardItem)?.currentVersion">→ 当前 v{{ getVersionWarning(hoveredCardItem)?.currentVersion }}</template>
+                        </span>
                       </div>
                       <div class="card-popover-hint">{{ t('knowledgeBase.clickToViewFull') }}</div>
                     </template>
@@ -4222,6 +4263,30 @@ async function createNewSession(value: string): Promise<void> {
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 280px;
+  }
+
+  .card-popover-version-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    margin: 6px 0 4px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    background: var(--td-warning-color-light, rgba(255, 168, 0, 0.1));
+    border: 1px solid var(--td-warning-color-3, rgba(255, 168, 0, 0.3));
+    font-size: 11px;
+    color: var(--td-warning-color-7, #8a5700);
+    line-height: 1.5;
+    max-width: 280px;
+
+    .t-icon {
+      flex-shrink: 0;
+      margin-top: 2px;
+      color: var(--td-warning-color, #ff9900);
+    }
+    strong {
+      font-weight: 600;
+    }
   }
 
   .card-popover-source {
