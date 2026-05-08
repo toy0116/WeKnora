@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 
+	agentmemory "github.com/Tencent/WeKnora/internal/agent/memory"
+	agenttoken "github.com/Tencent/WeKnora/internal/agent/token"
 	"github.com/Tencent/WeKnora/internal/agent/tools"
 	llmcontext "github.com/Tencent/WeKnora/internal/application/service/llmcontext"
 	"github.com/Tencent/WeKnora/internal/event"
@@ -138,6 +140,12 @@ func (s *sessionService) AgentQA(
 		llmContext = []chat.Message{}
 	}
 	logger.Infof(ctx, "Loaded %d messages from LLM context manager", len(llmContext))
+
+	// Proactively consolidate context when session history is long.
+	// Long-running IM sessions (e.g. WeChat Work groups) cannot easily start a new
+	// session, so we summarise older turns in-place before they overflow the LLM
+	// context window and degrade answer quality.
+	llmContext = s.maybeConsolidateHistory(ctx, summaryModel, agentConfig, llmContext)
 
 	// Apply multi-turn configuration for Agent mode
 	// Note: In Agent mode, context is managed by contextManager with compression strategies,
@@ -382,4 +390,53 @@ func (s *sessionService) getContextForSession(
 	}
 
 	return history, nil
+}
+
+// imHistoryConsolidationThreshold is the number of non-system messages in a session
+// that triggers proactive LLM summarisation before executing the next query.
+// Kept low enough to prevent context overload in long IM group sessions, but high
+// enough not to summarise during normal short conversations.
+const imHistoryConsolidationThreshold = 20
+
+// maybeConsolidateHistory summarises older turns when the session history is long.
+// It returns the (possibly compacted) message slice; the original context manager
+// storage is NOT modified — the summarised context is used only for this turn.
+func (s *sessionService) maybeConsolidateHistory(
+	ctx context.Context,
+	chatModel chat.Chat,
+	agentConfig *types.AgentConfig,
+	messages []chat.Message,
+) []chat.Message {
+	nonSystem := 0
+	for _, m := range messages {
+		if m.Role != "system" {
+			nonSystem++
+		}
+	}
+	if nonSystem < imHistoryConsolidationThreshold {
+		return messages
+	}
+
+	logger.Infof(ctx, "[HistoryConsolidation] Session has %d non-system messages (threshold=%d), consolidating",
+		nonSystem, imHistoryConsolidationThreshold)
+
+	tokenEst, estErr := agenttoken.NewEstimator()
+	if estErr != nil {
+		logger.Warnf(ctx, "[HistoryConsolidation] Failed to create token estimator: %v, skipping", estErr)
+		return messages
+	}
+	maxCtxTokens := agentConfig.MaxContextTokens
+	if maxCtxTokens <= 0 {
+		maxCtxTokens = types.DefaultMaxContextTokens
+	}
+	consolidator := agentmemory.NewConsolidator(chatModel, tokenEst, maxCtxTokens, 0)
+
+	consolidated, err := consolidator.Consolidate(ctx, messages)
+	if err != nil {
+		logger.Warnf(ctx, "[HistoryConsolidation] Failed: %v, continuing with full history", err)
+		return messages
+	}
+
+	logger.Infof(ctx, "[HistoryConsolidation] Done: %d → %d messages", len(messages), len(consolidated))
+	return consolidated
 }
