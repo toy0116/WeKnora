@@ -1651,6 +1651,11 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		// work correctly even after buf has been Reset by a flush.
 		lastCharNewline = true
 		streamedAny     bool // whether any user-visible content was written to buf
+
+		// agentDone is closed when the QA goroutine finishes (success or error).
+		// Used to wait for the goroutine before teardown so that context
+		// cancellation (via defer qaCancel) does not race with in-flight retries.
+		agentDone = make(chan struct{})
 	)
 	closeDone := func() { closeOnce.Do(func() { close(done) }) }
 
@@ -1704,6 +1709,7 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		bufMu.Unlock()
 
 		if data.Done {
+			logger.Infof(ctx, "[IM] closeDone: FinalAnswer Done=true")
 			closeDone()
 		}
 		return nil
@@ -1718,6 +1724,7 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		bufMu.Lock()
 		qaErr = fmt.Errorf("QA pipeline error: %s", data.Error)
 		bufMu.Unlock()
+		logger.Infof(ctx, "[IM] closeDone: EventError")
 		closeDone()
 		return nil
 	})
@@ -1818,6 +1825,7 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 
 	// Run QA async
 	go func() {
+		defer close(agentDone) // signal teardown loop that the agent goroutine has finished
 		var err error
 		req := buildIMQARequest(session, msg.Content, assistantMsg.ID, userMsg.ID, customAgent, kbIDs, msg.Quote)
 		if req.QuotedContext != "" {
@@ -1833,6 +1841,7 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 			bufMu.Lock()
 			qaErr = fmt.Errorf("QA execution error: %w", err)
 			bufMu.Unlock()
+			logger.Infof(ctx, "[IM] closeDone: QA goroutine error")
 			closeDone()
 		}
 	}()
@@ -1877,11 +1886,39 @@ loop:
 		case <-ticker.C:
 			flush(false)
 		case <-done:
+			logger.Infof(ctx, "[IM] Flush loop exited via <-done")
 			break loop
 		case <-qaCtx.Done():
+			logger.Infof(ctx, "[IM] Flush loop exited via <-qaCtx.Done: %v", qaCtx.Err())
 			break loop
 		}
 	}
+
+	// Wait for the QA goroutine to finish before running final cleanup.
+	// This prevents the deferred qaCancel() (which fires when handleMessageStream
+	// returns) from racing with in-flight retries inside the agent engine.
+	// Without this wait, a premature flush-loop exit (e.g., caused by a spurious
+	// done-channel close) would cause the defer to cancel the QA context while
+	// the engine is still mid-retry, resulting in "context canceled" LLM errors.
+	//
+	// The timeout is generous (agent LLMCallTimeout is 120 s; we allow one extra
+	// retry plus a margin, so 150 s total). A true /stop cancels qaCtx first,
+	// which causes the QA goroutine to fail quickly — so the wait is near-instant
+	// in the stop path.
+	if qaCtx.Err() == nil {
+		// Context is still live — the flush loop may have exited via <-done.
+		// If the agent goroutine is still running (e.g., in an empty-content
+		// retry), wait for it to finish so we don't cancel it prematurely.
+		const agentFinishTimeout = 150 * time.Second
+		select {
+		case <-agentDone:
+			// Agent goroutine finished — proceed to final flush.
+		case <-time.After(agentFinishTimeout):
+			logger.Warnf(ctx, "[IM] Agent goroutine did not finish within %v after flush loop exit, proceeding anyway", agentFinishTimeout)
+		}
+	}
+	// When qaCtx is already cancelled (user /stop), the agent fails quickly on
+	// its own — no need to wait; proceed immediately to cleanup.
 
 	// Final flush of any remaining content (including holdback).
 	flush(true)
