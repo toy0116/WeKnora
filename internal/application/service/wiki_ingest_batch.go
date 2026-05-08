@@ -122,25 +122,35 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 			logger.Warnf(ctx, "wiki ingest: redis SetNX failed: %v", err)
 		} else if !acquired {
 			exitStatus = "active_lock_conflict"
-			// If the pending list is already empty, the active batch will process
-			// everything — no need to retry. Returning nil avoids burning through the
-			// retry budget on tasks that would be no-ops when they eventually acquire
-			// the lock. If there are still pending ops, retry so we don't miss them
-			// in case the active batch drained the list before we RPush'd.
+			// Check pending list length with a background context — the task ctx
+			// could theoretically be near expiry even at this early stage if, for
+			// example, this is a high-retry-count attempt.
 			pendingKey := wikiPendingKeyPrefix + payload.KnowledgeBaseID
-			n, nErr := s.redisClient.LLen(ctx, pendingKey).Result()
-			if nErr != nil {
-				logger.Warnf(ctx, "wiki ingest: failed to read pending length during lock conflict for KB %s: %v", payload.KnowledgeBaseID, nErr)
-				logger.Infof(ctx, "wiki ingest: another batch active for KB %s, deferring to asynq retry", payload.KnowledgeBaseID)
-				return ErrWikiIngestConcurrent
-			}
+			llenCtx, llenCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			n, _ := s.redisClient.LLen(llenCtx, pendingKey).Result()
+			llenCancel()
 			if n == 0 {
+				// The active batch will drain everything — this task is a no-op.
 				exitStatus = "active_lock_conflict_empty"
 				logger.Infof(ctx, "wiki ingest: concurrent batch active for KB %s, pending list empty — skipping", payload.KnowledgeBaseID)
 				return nil
 			}
-			logger.Infof(ctx, "wiki ingest: another batch active for KB %s, deferring to asynq retry", payload.KnowledgeBaseID)
-			return ErrWikiIngestConcurrent
+			// Schedule a self-reschedule instead of returning ErrWikiIngestConcurrent.
+			//
+			// Returning ErrWikiIngestConcurrent causes asynq to retry the task every
+			// 15 s (wikiIngestRetryDelay). With MaxRetry=25 the total retry window is
+			// only 25×15s = 6 min. Under an LLM outage the active batch can hold the
+			// lock for up to 60 min, so every concurrent task exhausts all 25 retries
+			// and is permanently archived before the lock is ever released.
+			// (Evidence: 1097 tasks archived with "concurrent wiki task active" error.)
+			//
+			// Instead: schedule a new task to fire after wikiLockConflictRescheduleDelay
+			// (3 min), well past the active lock TTL + renewal cycle, and return nil so
+			// the current task completes cleanly without consuming any retry budget.
+			logger.Infof(ctx, "wiki ingest: another batch active for KB %s (%d pending) — self-rescheduling in %s",
+				payload.KnowledgeBaseID, n, wikiLockConflictRescheduleDelay)
+			s.scheduleSelfReschedule(ctx, payload, wikiLockConflictRescheduleDelay)
+			return nil
 		}
 		lockAcquired = acquired
 
@@ -167,8 +177,10 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		// In-process mutual exclusion: mirrors the Redis SetNX lock above.
 		if _, loaded := s.liteLocks.LoadOrStore(payload.KnowledgeBaseID, struct{}{}); loaded {
 			exitStatus = "active_lock_conflict"
-			logger.Infof(ctx, "wiki ingest: another batch active for KB %s (lite lock), deferring to asynq retry", payload.KnowledgeBaseID)
-			return ErrWikiIngestConcurrent
+			logger.Infof(ctx, "wiki ingest: another batch active for KB %s (lite lock) — self-rescheduling in %s",
+				payload.KnowledgeBaseID, wikiLockConflictRescheduleDelay)
+			s.scheduleSelfReschedule(ctx, payload, wikiLockConflictRescheduleDelay)
+			return nil
 		}
 		lockAcquired = true
 		defer s.liteLocks.Delete(payload.KnowledgeBaseID)

@@ -117,6 +117,15 @@ const (
 	// between retry attempts. The nth retry waits base << (n-1) — so with
 	// a 2s base we wait 2s, 4s, 8s between attempts.
 	wikiLLMBackoffBase = 2 * time.Second
+
+	// wikiLockConflictRescheduleDelay is how far into the future a
+	// "lock conflict" task reschedules itself. Must comfortably exceed
+	// wikiActiveLockTTL × renewal-cycle count so the new task fires after
+	// the current owner has either finished or its orphaned lock has expired.
+	wikiLockConflictRescheduleDelay = 3 * time.Minute
+
+	// wikiLLMCallTimeout caps a single generateWithTemplate / LLM round-trip.
+	wikiLLMCallTimeout = 5 * time.Minute
 )
 
 // WikiDeletedTombstoneKey returns the Redis key used to mark a knowledge as
@@ -235,7 +244,14 @@ func EnqueueWikiIngest(ctx context.Context, task interfaces.TaskEnqueuer, redisC
 		Language:        lang,
 	}
 
-	// Push to Redis pending list (if Redis available)
+	// Push to Redis pending list (if Redis available).
+	//
+	// NOTE: use a background context for RPush/Expire. The incoming ctx is the
+	// asynq task context of the caller (knowledge_post_process), which has its
+	// own timeout. If that timeout fires while we are here the RPush would
+	// silently fail, the document would never enter the wiki pipeline, and
+	// there is no other trigger to re-add it (same silent-drop pattern as
+	// Bug 1 in trimPendingList / requeueFailedOps).
 	if redisClient != nil {
 		pendingKey := wikiPendingKeyPrefix + kbID
 		// Reset stale fail counter for fresh user-triggered ingest enqueue.
@@ -248,8 +264,10 @@ func EnqueueWikiIngest(ctx context.Context, task interfaces.TaskEnqueuer, redisC
 			Language:    lang,
 		}
 		opBytes, _ := json.Marshal(op)
-		redisClient.RPush(ctx, pendingKey, string(opBytes))
-		redisClient.Expire(ctx, pendingKey, wikiPendingTTL)
+		pushCtx, pushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		redisClient.RPush(pushCtx, pendingKey, string(opBytes))
+		redisClient.Expire(pushCtx, pendingKey, wikiPendingTTL)
+		pushCancel()
 	} else {
 		// Fallback for Lite mode (no Redis)
 		payload.LiteOps = []WikiPendingOp{{
@@ -1108,11 +1126,21 @@ func (s *wikiIngestService) generateWithTemplate(ctx context.Context, chatModel 
 	}
 
 	prompt := buf.String()
+
+	// Bound each LLM call independently. rawHTTPClient has no overall Timeout
+	// ("controlled by context cancellation only"), so a server that accepts
+	// connections but never responds blocks until the outer task ctx expires
+	// (60 min). With wikiLLMCallTimeout we cap the per-call worst case at
+	// 5 min; the early-bail in ProcessWikiIngest then fast-exits the batch
+	// rather than exhausting the full 60-minute task budget.
+	callCtx, callCancel := context.WithTimeout(ctx, wikiLLMCallTimeout)
+	defer callCancel()
+
 	thinking := false
 
 	var lastErr error
 	for attempt := 1; attempt <= wikiLLMMaxAttempts; attempt++ {
-		response, err := chatModel.Chat(ctx, []chat.Message{
+		response, err := chatModel.Chat(callCtx, []chat.Message{
 			{Role: "user", Content: prompt},
 		}, &chat.ChatOptions{
 			Temperature: 0.3,
@@ -1123,9 +1151,6 @@ func (s *wikiIngestService) generateWithTemplate(ctx context.Context, chatModel 
 		}
 		lastErr = err
 
-		// Abort immediately on non-retryable errors (4xx except 408/429,
-		// parse/marshal failures, tool-side bugs, etc.). Retrying a
-		// hard "invalid arguments" error just wastes the model's budget.
 		if !isTransientLLMError(ctx, err) {
 			return "", fmt.Errorf("LLM call failed: %w", err)
 		}
@@ -1137,8 +1162,8 @@ func (s *wikiIngestService) generateWithTemplate(ctx context.Context, chatModel 
 		logger.Warnf(ctx, "wiki ingest: LLM call failed (attempt %d/%d), retrying in %s: %v",
 			attempt, wikiLLMMaxAttempts, backoff, err)
 		select {
-		case <-ctx.Done():
-			return "", fmt.Errorf("LLM call aborted during backoff: %w", ctx.Err())
+		case <-callCtx.Done():
+			return "", fmt.Errorf("LLM call aborted during backoff: %w", callCtx.Err())
 		case <-time.After(backoff):
 		}
 	}
@@ -1146,26 +1171,11 @@ func (s *wikiIngestService) generateWithTemplate(ctx context.Context, chatModel 
 }
 
 // isTransientLLMError reports whether an error from the chat provider
-// looks like an infrastructure hiccup worth retrying. Classification is
-// intentionally conservative: the truthful "could not tell, assume
-// permanent" choice keeps retries cheap and avoids masking real bugs.
-//
-// We treat the following as transient:
-//   - HTTP 408 (client request timeout — upstream usually didn't process),
-//     429 (rate-limited — retry after backoff may succeed), 5xx (any
-//     server-side fault, including the 504 "Remote error, timeout with
-//     60" we see from the gateway in front of several LLM providers).
-//   - Wrapped context.DeadlineExceeded when the parent ctx is still alive
-//     (nested per-call timeouts).
-//   - Substring matches on the error text for common transport failures
-//     ("timeout", "connection reset", "EOF") that providers surface
-//     without a structured status code.
+// looks like an infrastructure hiccup worth retrying.
 func isTransientLLMError(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}
-	// Never retry after the parent ctx itself expired — the task is
-	// being cancelled and the next attempt would just fail again.
 	if ctx.Err() != nil {
 		return false
 	}
@@ -1201,6 +1211,40 @@ func isTransientLLMError(ctx context.Context, err error) bool {
 		}
 	}
 	return false
+}
+
+// scheduleSelfReschedule enqueues a new wiki:ingest task for the same KB with
+// the given delay and returns immediately. Used by the lock-conflict path to
+// avoid returning ErrWikiIngestConcurrent, which would burn the MaxRetry
+// budget (25 × 15s = 6 min) — far shorter than an active batch under LLM
+// outage can hold the lock (up to 60 min), resulting in permanent archival.
+//
+// Always uses context.Background() so an expiring task ctx cannot silently
+// drop the reschedule.
+func (s *wikiIngestService) scheduleSelfReschedule(ctx context.Context, payload WikiIngestPayload, delay time.Duration) {
+	schedPayload := WikiIngestPayload{
+		TenantID:        payload.TenantID,
+		KnowledgeBaseID: payload.KnowledgeBaseID,
+		Language:        payload.Language,
+		LiteOps:         payload.LiteOps, // non-nil only in Lite mode
+	}
+	langfuse.InjectTracing(ctx, &schedPayload)
+	payloadBytes, _ := json.Marshal(schedPayload)
+	t := asynq.NewTask(types.TypeWikiIngest, payloadBytes,
+		asynq.Queue("low"),
+		asynq.MaxRetry(25),
+		asynq.Timeout(60*time.Minute),
+		asynq.ProcessIn(delay),
+	)
+	// s.task.Enqueue uses the asynq client's own Redis connection and does not
+	// consume the incoming ctx, so there is no cancelled-context risk here.
+	if _, err := s.task.Enqueue(t); err != nil {
+		logger.Warnf(ctx, "wiki ingest: self-reschedule enqueue failed for KB %s (delay=%s): %v — items may not be retried",
+			payload.KnowledgeBaseID, delay, err)
+	} else {
+		logger.Infof(ctx, "wiki ingest: self-rescheduled for KB %s in %s (lock conflict, preserving retry budget)",
+			payload.KnowledgeBaseID, delay)
+	}
 }
 
 // --- Helpers ---

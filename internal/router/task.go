@@ -275,6 +275,35 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	// Register wiki ingest handler
 	mux.HandleFunc(types.TypeWikiIngest, params.WikiIngest.Handle)
 
+	// Wiki pending-list reconciliation.
+	//
+	// Runs once at startup (after reclaim) to rescue any wiki:pending lists
+	// that are non-empty but have no active processor — the primary symptom
+	// of the concurrent-retry-budget-exhaustion bug (Bug 2: 1097 tasks
+	// permanently archived).  Then repeats every 20 minutes as a continuous
+	// safety-net against future orphaned lists (Redis restart, process crash,
+	// new bug).
+	//
+	// We check via type-assertion so adding the reconciler does not require
+	// changing the interfaces.TaskHandler signature.
+	if reconciler, ok := params.WikiIngest.(interface {
+		ReconcileWikiPendingLists(ctx context.Context)
+	}); ok {
+		go func() {
+			// Brief startup delay — let the asynq workers come up and
+			// the reclaim step finish before we fire the first scan.
+			time.Sleep(10 * time.Second)
+			reconcileCtx := context.Background()
+			reconciler.ReconcileWikiPendingLists(reconcileCtx)
+
+			ticker := time.NewTicker(service.WikiReconcileInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				reconciler.ReconcileWikiPendingLists(reconcileCtx)
+			}
+		}()
+	}
+
 	go func() {
 		// Start the server
 		if err := params.Server.Run(mux); err != nil {
