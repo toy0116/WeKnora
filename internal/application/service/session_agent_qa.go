@@ -425,11 +425,14 @@ func (s *sessionService) maybeConsolidateHistory(
 		logger.Warnf(ctx, "[HistoryConsolidation] Failed to create token estimator: %v, skipping", estErr)
 		return messages
 	}
-	maxCtxTokens := agentConfig.MaxContextTokens
-	if maxCtxTokens <= 0 {
-		maxCtxTokens = types.DefaultMaxContextTokens
-	}
-	consolidator := agentmemory.NewConsolidator(chatModel, tokenEst, maxCtxTokens, 0)
+	// Use a synthetic token budget scaled to message count so the Consolidator's
+	// internal token-budget check fires even when KB tool-result history has been
+	// redacted (short placeholders make BPE estimates look cheap). The formula
+	// imHistoryConsolidationThreshold * 300 gives ~6 000 tokens at threshold=20,
+	// making the Consolidator's target (budget * 0.3 ≈ 1 800 tokens) small enough
+	// that even redacted history exceeds it and gets summarised.
+	syntheticMaxTokens := imHistoryConsolidationThreshold * 300
+	consolidator := agentmemory.NewConsolidator(chatModel, tokenEst, syntheticMaxTokens, 0)
 
 	consolidated, err := consolidator.Consolidate(ctx, messages)
 	if err != nil {

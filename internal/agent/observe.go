@@ -132,19 +132,32 @@ func (e *AgentEngine) analyzeResponse(
 			"answer_len": len(response.Content),
 		})
 
-		// Emit answer as final answer event (thinking events were already streamed)
-		answerID := generateEventID("answer")
-		if response.Content != "" {
-			e.eventBus.Emit(ctx, event.Event{
-				ID:        answerID,
-				Type:      event.EventAgentFinalAnswer,
-				SessionID: sessionID,
-				Data: event.AgentFinalAnswerData{
-					Content: response.Content,
-					Done:    false,
-				},
-			})
+		// When content is empty, suppress the Done event — the engine will retry
+		// via the emptyRetries path in runReActIteration and emit the done event
+		// once a real answer is obtained. Emitting Done:true here would close the
+		// IM stream handler before the retry completes, creating a race where the
+		// retry LLM call fails with "context canceled".
+		if response.Content == "" {
+			return responseVerdict{
+				isDone:       true,
+				finalAnswer:  "",
+				emptyContent: true,
+				step:         step,
+			}
 		}
+
+		// Non-empty natural stop: emit answer as final answer event.
+		// (Thinking events were already streamed during the LLM call.)
+		answerID := generateEventID("answer")
+		e.eventBus.Emit(ctx, event.Event{
+			ID:        answerID,
+			Type:      event.EventAgentFinalAnswer,
+			SessionID: sessionID,
+			Data: event.AgentFinalAnswerData{
+				Content: response.Content,
+				Done:    false,
+			},
+		})
 		e.eventBus.Emit(ctx, event.Event{
 			ID:        answerID,
 			Type:      event.EventAgentFinalAnswer,
@@ -156,10 +169,9 @@ func (e *AgentEngine) analyzeResponse(
 		})
 
 		return responseVerdict{
-			isDone:       true,
-			finalAnswer:  response.Content,
-			emptyContent: response.Content == "",
-			step:         step,
+			isDone:      true,
+			finalAnswer: response.Content,
+			step:        step,
 		}
 	}
 

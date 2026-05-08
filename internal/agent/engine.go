@@ -381,11 +381,13 @@ loop:
 		case <-ctx.Done():
 			logger.Warnf(ctx, "[Agent] Context cancelled at round %d: %v",
 				state.CurrentRound+1, ctx.Err())
-			// Try to salvage existing results
+			// Try to salvage existing results.
+			// Use WithoutCancel so the synthesis LLM call is not immediately
+			// rejected by the already-cancelled ctx.
 			if totalTC := countTotalToolCalls(state.RoundSteps); totalTC > 0 {
 				logger.Infof(ctx, "[Agent] Synthesizing final answer from %d existing tool results",
 					totalTC)
-				_ = e.streamFinalAnswerToEventBus(ctx, query, state, sessionID)
+				_ = e.streamFinalAnswerToEventBus(context.WithoutCancel(ctx), query, state, sessionID)
 				state.IsComplete = true
 			}
 			return state, ctx.Err()
@@ -610,10 +612,26 @@ func (e *AgentEngine) runReActIteration(
 				})
 				return iterOutcomeContinue, nil
 			}
-			// Retries exhausted — use fallback message rather than empty answer
+			// Retries exhausted — emit a fallback final answer so the IM
+			// stream handler (or any EventAgentFinalAnswer subscriber) can
+			// close cleanly instead of hanging.
 			logger.Warnf(ctx, "[Agent][Round-%d] Empty content after %d retries - using fallback",
 				round, maxEmptyResponseRetries)
-			state.FinalAnswer = "I'm sorry, I was unable to generate a response. Please try again."
+			fallbackAnswer := "I'm sorry, I was unable to generate a response. Please try again."
+			fallbackID := generateEventID("answer")
+			e.eventBus.Emit(ctx, event.Event{
+				ID:        fallbackID,
+				Type:      event.EventAgentFinalAnswer,
+				SessionID: sessionID,
+				Data:      event.AgentFinalAnswerData{Content: fallbackAnswer, Done: false},
+			})
+			e.eventBus.Emit(ctx, event.Event{
+				ID:        fallbackID,
+				Type:      event.EventAgentFinalAnswer,
+				SessionID: sessionID,
+				Data:      event.AgentFinalAnswerData{Content: "", Done: true},
+			})
+			state.FinalAnswer = fallbackAnswer
 			state.IsComplete = true
 			state.RoundSteps = append(state.RoundSteps, verdict.step)
 			return iterOutcomeBreak, nil
