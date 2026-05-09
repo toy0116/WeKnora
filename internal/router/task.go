@@ -1,21 +1,18 @@
 package router
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/application/service"
-	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/middleware/asynqdl"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/hibiken/asynq"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/dig"
 )
 
@@ -32,6 +29,7 @@ type AsynqTaskParams struct {
 	ImageMultimodal      interfaces.TaskHandler `name:"imageMultimodal"`
 	KnowledgePostProcess interfaces.TaskHandler `name:"knowledgePostProcess"`
 	WikiIngest           interfaces.TaskHandler `name:"wikiIngest"`
+	DeadLetterRepo       interfaces.TaskDeadLetterRepository
 }
 
 func getAsynqRedisClientOpt() *asynq.RedisClientOpt {
@@ -90,20 +88,10 @@ func NewAsynqServer() *asynq.Server {
 	srv := asynq.NewServer(
 		opt,
 		asynq.Config{
-			// Concurrency: LLM/embedding 调用全是 I/O bound（等 API 响应），
-			// 设为 CPU 核数的 2 倍可大幅提升吞吐，不增加 CPU 负担。
-			Concurrency: 16,
-			// 队列权重：chunk:extract / wiki:ingest / summary / question 全在 low 队列。
-			// 原始权重 low:1 导致 pipeline 只能获得约 0.8 个 worker（严重瓶颈）。
-			// 反转权重后 low 队列获得 ~10 个 worker，吞吐提升 ~10x。
-			//
-			// doc_large: 大文件（≥5 MB）的 document:process 任务。权重 1 确保同队列小文件
-			// 优先处理完毕后，大文件才占用 worker，避免少数超大文件阻塞后续小文件。
 			Queues: map[string]int{
-				"critical":  2, // 实时对话/紧急任务（低并发）
-				"default":   2, // document:process 小文件（<5 MB）
-				"doc_large": 1, // document:process 大文件（≥5 MB）— 低优先级
-				"low":       6, // chunk:extract + wiki:ingest — pipeline 主力
+				"critical": 6, // Highest priority queue
+				"default":  3, // Default priority queue
+				"low":      1, // Lowest priority queue
 			},
 			RetryDelayFunc: asynqRetryDelayFunc,
 		},
@@ -111,119 +99,18 @@ func NewAsynqServer() *asynq.Server {
 	return srv
 }
 
-// buildRedisClientForReclaim creates a short-lived redis.Client using the same
-// connection parameters as the asynq server. Returns nil when Redis is not
-// configured (Lite mode) so callers can skip reclaim gracefully.
-func buildRedisClientForReclaim() *redis.Client {
-	addr := os.Getenv("REDIS_ADDR")
-	if addr == "" {
-		return nil // Lite mode — no Redis, no reclaim needed
-	}
-	db := 0
-	if dbStr := os.Getenv("REDIS_DB"); dbStr != "" {
-		if parsed, err := strconv.Atoi(dbStr); err == nil {
-			db = parsed
-		}
-	}
-	rc := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Username: os.Getenv("REDIS_USERNAME"),
-		Password: os.Getenv("REDIS_PASSWORD"),
-		DB:       db,
-	})
-	if err := rc.Ping(context.Background()).Err(); err != nil {
-		logger.Warnf(context.Background(), "[Asynq] Redis ping failed during startup reclaim: %v", err)
-		_ = rc.Close()
-		return nil
-	}
-	return rc
-}
-
-// reclaimStaleAsynqTasks recovers tasks that were left in the "active" list
-// when a previous server instance crashed or was forcibly killed.
-//
-// Background: asynq marks a task active when a worker dequeues it. On a clean
-// shutdown the worker re-queues in-flight tasks via SIGTERM handling. On a
-// crash or SIGKILL, no cleanup runs — tasks stay in the active list forever
-// and are never retried unless explicitly reclaimed.
-//
-// This function runs synchronously at startup (before any worker goroutine
-// accepts new work) so there is no race with live workers.
-//
-// For each active task we distinguish three cases:
-//   - Real task (msg field present, len > 0): move back to pending so it gets
-//     retried with a fresh attempt count.
-//   - Ghost entry (msg field absent / zero-length): the task data TTL already
-//     expired; just remove the dangling ID from the active list.
-//
-// Queues are processed in reverse-priority order so higher-priority queues
-// drain into pending first.
-func reclaimStaleAsynqTasks(ctx context.Context, rc *redis.Client) {
-	queues := []string{"low", "default", "critical"}
-	totalReclaimed, totalGhosts := 0, 0
-
-	for _, q := range queues {
-		activeKey := fmt.Sprintf("asynq:{%s}:active", q)
-		pendingKey := fmt.Sprintf("asynq:{%s}:pending", q)
-
-		ids, err := rc.LRange(ctx, activeKey, 0, -1).Result()
-		if err != nil || len(ids) == 0 {
-			continue
-		}
-
-		reclaimed, ghosts := 0, 0
-		for _, id := range ids {
-			taskKey := fmt.Sprintf("asynq:{%s}:t:%s", q, id)
-
-			// Check whether the task still has its message payload.
-			// A hash with only the "state" key (len==1) is a ghost.
-			fields, herr := rc.HLen(ctx, taskKey).Result()
-			if herr != nil {
-				continue
-			}
-
-			if fields <= 1 {
-				// Ghost: payload TTL expired; just remove from active list.
-				_ = rc.LRem(ctx, activeKey, 0, id).Err()
-				ghosts++
-				continue
-			}
-
-			// Real task: move back to pending atomically.
-			pipe := rc.Pipeline()
-			pipe.LRem(ctx, activeKey, 1, id)
-			pipe.HSet(ctx, taskKey, "state", "pending")
-			pipe.RPush(ctx, pendingKey, id)
-			if _, err := pipe.Exec(ctx); err == nil {
-				reclaimed++
-			}
-		}
-
-		if reclaimed+ghosts > 0 {
-			logger.Infof(ctx, "[Asynq] queue=%s reclaimed=%d ghost_removed=%d", q, reclaimed, ghosts)
-		}
-		totalReclaimed += reclaimed
-		totalGhosts += ghosts
-	}
-
-	if totalReclaimed+totalGhosts > 0 {
-		logger.Infof(ctx, "[Asynq] Startup reclaim complete: tasks_recovered=%d ghost_entries_removed=%d",
-			totalReclaimed, totalGhosts)
-	}
-}
-
 func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
-	// Reclaim any tasks that were left in the "active" list by a previous
-	// crashed/killed server instance. This must run before workers start so
-	// there is no race between reclaim and live task processing.
-	if rc := buildRedisClientForReclaim(); rc != nil {
-		reclaimCtx := context.Background()
-		reclaimStaleAsynqTasks(reclaimCtx, rc)
-		_ = rc.Close()
-	}
-
 	// Create a new mux and register all handlers
 	mux := asynq.NewServeMux()
+
+	// Install the dead-letter middleware FIRST so it sees the raw error
+	// returned by the handler, before any other middleware that might
+	// transform it. The middleware records one task_dead_letters row per
+	// task that exhausts its retry budget — operators can then SQL-query
+	// failures by task type, scope, or tenant without scraping logs.
+	// Best-effort: a DB failure is logged and swallowed; the original task
+	// error always propagates upstream to asynq for retry/archival.
+	mux.Use(asynqdl.Middleware(params.DeadLetterRepo))
 
 	// Install Langfuse middleware BEFORE handler registration so every task
 	// type is automatically wrapped. When Langfuse is disabled the middleware
@@ -278,35 +165,6 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 
 	// Register wiki ingest handler
 	mux.HandleFunc(types.TypeWikiIngest, params.WikiIngest.Handle)
-
-	// Wiki pending-list reconciliation.
-	//
-	// Runs once at startup (after reclaim) to rescue any wiki:pending lists
-	// that are non-empty but have no active processor — the primary symptom
-	// of the concurrent-retry-budget-exhaustion bug (Bug 2: 1097 tasks
-	// permanently archived).  Then repeats every 20 minutes as a continuous
-	// safety-net against future orphaned lists (Redis restart, process crash,
-	// new bug).
-	//
-	// We check via type-assertion so adding the reconciler does not require
-	// changing the interfaces.TaskHandler signature.
-	if reconciler, ok := params.WikiIngest.(interface {
-		ReconcileWikiPendingLists(ctx context.Context)
-	}); ok {
-		go func() {
-			// Brief startup delay — let the asynq workers come up and
-			// the reclaim step finish before we fire the first scan.
-			time.Sleep(10 * time.Second)
-			reconcileCtx := context.Background()
-			reconciler.ReconcileWikiPendingLists(reconcileCtx)
-
-			ticker := time.NewTicker(service.WikiReconcileInterval)
-			defer ticker.Stop()
-			for range ticker.C {
-				reconciler.ReconcileWikiPendingLists(reconcileCtx)
-			}
-		}()
-	}
 
 	go func() {
 		// Start the server
