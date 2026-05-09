@@ -759,7 +759,7 @@
                         <t-input-number
                           v-model="formData.config.llm_call_timeout"
                           :min="0"
-                          :max="600"
+                          :max="3600"
                           theme="column"
                           :placeholder="$t('agentEditor.llmCallTimeout.placeholder')"
                           clearable
