@@ -1465,8 +1465,19 @@ func (s *wikiIngestService) deduplicateExtractedBatch(
 			logger.Warnf(ctx, "wiki ingest: dedup rejected %s → %s (target slug does not exist in candidate set)", srcSlug, dstSlug)
 			return false
 		}
-		srcPrefix := srcSlug[:strings.Index(srcSlug, "/")+1]
-		dstPrefix := dstSlug[:strings.Index(dstSlug, "/")+1]
+		srcSlash := strings.Index(srcSlug, "/")
+		dstSlash := strings.Index(dstSlug, "/")
+		if srcSlash <= 0 || dstSlash <= 0 {
+			// A type-prefixed slug must look like "entity/foo" or
+			// "concept/bar". An LLM that emits an un-prefixed slug
+			// here is hallucinating; reject rather than fall through
+			// the prefix-equality check (which would treat both empty
+			// prefixes as a match).
+			logger.Warnf(ctx, "wiki ingest: dedup rejected %s → %s (missing type prefix)", srcSlug, dstSlug)
+			return false
+		}
+		srcPrefix := srcSlug[:srcSlash+1]
+		dstPrefix := dstSlug[:dstSlash+1]
 		if srcPrefix != dstPrefix {
 			logger.Warnf(ctx, "wiki ingest: dedup rejected %s → %s (type mismatch: %s vs %s)", srcSlug, dstSlug, srcPrefix, dstPrefix)
 			return false
