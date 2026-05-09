@@ -271,6 +271,7 @@ export default {
     selectAll: "전체 선택",
     selectedCount: "{count}개 선택됨",
     clearSelection: "선택 해제",
+    batchMove: "선택 이동",
     batchDelete: "선택 삭제",
     batchDeleteConfirmation: "일괄 삭제 확인",
     confirmBatchDeleteDocument: "선택한 {count}개 문서를 삭제하시겠습니까? 삭제 후 복구할 수 없습니다.",

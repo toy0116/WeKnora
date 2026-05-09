@@ -5,12 +5,14 @@ defineProps<{
   count: number;
   loading?: boolean;
   tagging?: boolean;
+  moving?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'clear'): void;
   (e: 'delete'): void;
   (e: 'tag'): void;
+  (e: 'move'): void;
 }>();
 
 const { t } = useI18n();
@@ -27,6 +29,16 @@ const { t } = useI18n();
           </t-button>
         </div>
         <div class="batch-bar-actions">
+          <t-button
+            theme="default"
+            variant="outline"
+            size="small"
+            :loading="moving"
+            @click="emit('move')"
+          >
+            <template #icon><t-icon name="swap" size="14px" /></template>
+            {{ t('knowledgeBase.batchMove') }}
+          </t-button>
           <t-button
             theme="default"
             variant="outline"
@@ -58,7 +70,7 @@ const { t } = useI18n();
   position: relative;
   z-index: 5;
   width: 100%;
-  max-width: 560px;
+  max-width: 600px;
   margin: 0 auto;
   padding: 0 4px;
   box-sizing: border-box;

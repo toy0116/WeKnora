@@ -239,6 +239,7 @@ export default {
     selectAll: 'Выбрать все',
     selectedCount: 'Выбрано: {count}',
     clearSelection: 'Снять выделение',
+    batchMove: 'Переместить выбранные',
     batchDelete: 'Удалить выбранные',
     batchDeleteConfirmation: 'Подтверждение пакетного удаления',
     confirmBatchDeleteDocument: 'Удалить {count} выбранных документов? Это действие нельзя отменить.',

@@ -34,6 +34,7 @@ import {
 import FAQEntryManager from './components/FAQEntryManager.vue';
 import DocumentListView from './components/DocumentListView.vue';
 import DocumentBatchBar from './components/DocumentBatchBar.vue';
+import MoveToKbDialog from './components/MoveToKbDialog.vue';
 import WikiBrowser from './wiki/WikiBrowser.vue';
 import { getWikiStats } from '@/api/wiki';
 import { listMoveTargets, moveKnowledge, getKnowledgeMoveProgress } from '@/api/knowledge-base';
@@ -292,6 +293,26 @@ const moveSelectedTargetName = ref('');
 const moveMode = ref<'reuse_vectors' | 'reparse'>('reuse_vectors');
 const moveSubmitting = ref(false);
 let movePollTimer: ReturnType<typeof setInterval> | null = null;
+
+// Move dialog — for list view single-item move and batch move
+const moveDialogVisible = ref(false);
+const moveDialogIds = ref<string[]>([]);
+
+const openMoveDialog = (ids: string[]) => {
+  moveDialogIds.value = ids;
+  moveDialogVisible.value = true;
+};
+
+const handleBatchMove = () => {
+  if (selectedIds.value.size === 0) return;
+  openMoveDialog(Array.from(selectedIds.value));
+};
+
+const onMoveDialogMoved = () => {
+  clearSelection();
+  page = 1;
+  loadKnowledgeFiles(kbId.value);
+};
 
 // View mode (grid / list) — persisted per browser
 type DocViewMode = 'grid' | 'list';
@@ -1803,7 +1824,7 @@ const handleListAction = (
   const idx = (cardList.value || []).findIndex((i: KnowledgeCard) => i.id === item.id);
   if (action === 'edit') return handleManualEdit(idx, item);
   if (action === 'reparse') return handleKnowledgeReparse(idx, item);
-  if (action === 'move') return handleMoveKnowledge(item);
+  if (action === 'move') return openMoveDialog([item.id]);
   if (action === 'delete') return delCard(idx, item);
 };
 
@@ -2568,6 +2589,7 @@ async function createNewSession(value: string): Promise<void> {
                 @clear="clearSelection"
                 @delete="openBatchDeleteDialog"
                 @tag="openBatchTagDialog"
+                @move="handleBatchMove"
               />
             </div>
           </div>
@@ -2594,6 +2616,14 @@ async function createNewSession(value: string): Promise<void> {
               </div>
             </div>
           </t-dialog>
+
+          <!-- 移动到知识库弹窗（列表视图单项 + 批量移动共用） -->
+          <MoveToKbDialog
+            v-model:visible="moveDialogVisible"
+            :source-kb-id="kbId"
+            :knowledge-ids="moveDialogIds"
+            @moved="onMoveDialogMoved"
+          />
 
           <!-- 批量删除确认弹窗 -->
           <t-dialog

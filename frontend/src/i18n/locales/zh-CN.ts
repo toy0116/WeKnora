@@ -268,6 +268,7 @@ export default {
     selectAll: "全选",
     selectedCount: "已选 {count} 项",
     clearSelection: "取消选择",
+    batchMove: "批量移动",
     batchDelete: "批量删除",
     batchDeleteConfirmation: "批量删除确认",
     confirmBatchDeleteDocument: "确认删除选中的 {count} 个文档？删除后将无法恢复。",
