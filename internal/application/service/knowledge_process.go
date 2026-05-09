@@ -2389,6 +2389,21 @@ func (s *knowledgeService) convert(
 		return s.failKnowledge(ctx, knowledge, isLastRetry, "document read failed: %v", err)
 	}
 	if result.Error != "" {
+		// Hybrid engines may fail on PDFs with non-standard formats (e.g. PDFium
+		// "Data format error"). Fall back to builtin once before giving up.
+		if parserEngine == "pdf_hybrid" && !isURL {
+			logger.Warnf(ctx, "[convert] pdf_hybrid failed for %q (%s), retrying with builtin: %s",
+				req.FileName, fileType, result.Error)
+			fallbackReader := s.documentReader
+			if fallbackReader != nil {
+				req.ParserEngine = "builtin"
+				if fallbackResult, fallbackErr := fallbackReader.Read(ctx, req); fallbackErr == nil && fallbackResult.Error == "" {
+					logger.Infof(ctx, "[convert] builtin fallback succeeded for %q", req.FileName)
+					return fallbackResult, nil
+				}
+				logger.Warnf(ctx, "[convert] builtin fallback also failed for %q, marking as failed", req.FileName)
+			}
+		}
 		logger.Errorf(ctx, "[convert] parser returned error kb=%s knowledge=%s file=%q type=%s engine=%q: %s",
 			kb.ID, knowledge.ID, req.FileName, fileType, parserEngine, result.Error)
 		knowledge.ParseStatus = "failed"

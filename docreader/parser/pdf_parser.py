@@ -139,33 +139,41 @@ class PDFHybridParser(BaseParser):
             self.file_name, has_images, "hybrid" if has_images else "text-only",
         )
 
-        def _extract_text() -> str:
+        def _extract_text() -> tuple[str, BaseException | None]:
             try:
                 parser = MarkitdownParser(file_name=self.file_name, file_type=self.file_type)
                 doc = parser.parse_into_text(content)
-                return doc.content if doc.is_valid() else ""
-            except Exception:
+                return (doc.content if doc.is_valid() else ""), None
+            except Exception as e:
                 logger.exception("PDFHybridParser: MarkitdownParser failed")
-                return ""
+                return "", e
 
-        def _render_pages() -> Document:
+        def _render_pages() -> tuple[Document, BaseException | None]:
             try:
                 parser = PDFScannedParser(file_name=self.file_name, file_type=self.file_type)
-                return parser.parse_into_text(content)
-            except Exception:
+                return parser.parse_into_text(content), None
+            except Exception as e:
                 logger.exception("PDFHybridParser: PDFScannedParser failed")
-                return Document()
+                return Document(), e
 
         if not has_images:
             # Text-only fast path: skip expensive page rendering entirely.
-            return Document(content=_extract_text())
+            text_content, text_err = _extract_text()
+            if text_err and not text_content:
+                raise text_err
+            return Document(content=text_content)
 
         # Image-rich path: run both concurrently, merge results.
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             text_future = executor.submit(_extract_text)
             image_future = executor.submit(_render_pages)
-            text_content = text_future.result()
-            image_doc = image_future.result()
+            text_content, text_err = text_future.result()
+            image_doc, render_err = image_future.result()
+
+        # Both paths failed — raise so the caller can fall back to another engine.
+        if not text_content and not image_doc.images:
+            exc = render_err or text_err or RuntimeError("PDFHybridParser: both text and render paths failed")
+            raise exc
 
         if image_doc.images:
             parts = [p for p in (text_content, image_doc.content) if p]
