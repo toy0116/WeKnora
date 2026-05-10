@@ -357,6 +357,15 @@ func (h *Handler) setupSSEStream(reqCtx *qaRequestContext, generateTitle bool) *
 	h.setupStreamHandler(asyncCtx, reqCtx.sessionID, reqCtx.assistantMessage.ID,
 		reqCtx.requestID, reqCtx.assistantMessage, eventBus)
 
+	// Touch session updated_at so the sidebar always shows this session in the
+	// correct time bucket (e.g. "今天") for every message, not just the first one.
+	// Best-effort: a failure does not block the QA reply.
+	go func(sess *types.Session) {
+		if err := h.sessionService.UpdateSession(asyncCtx, sess); err != nil {
+			logger.Warnf(asyncCtx, "[QA] failed to touch session updated_at for %s: %v", sess.ID, err)
+		}
+	}(reqCtx.session)
+
 	// Generate title if needed
 	if generateTitle && reqCtx.session.Title == "" {
 		// Use the same model as the conversation for title generation
