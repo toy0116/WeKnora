@@ -1145,6 +1145,11 @@ func (s *Service) executeQARequest(req *qaRequest) {
 	// runQA after the assistant message is created (that's when we have the
 	// sessionID + messageID needed to poll StreamManager).
 
+	// Touch session updated_at so the web UI sidebar shows this session in the
+	// correct time bucket (e.g. "今天") even when the session was first created
+	// days ago. Best-effort: a failure does not block the QA reply.
+	s.touchSessionUpdatedAt(ctx, req.session.ID)
+
 	// kbIDs is left empty so the QA pipeline resolves them from the agent config.
 	var kbIDs []string
 
@@ -2767,6 +2772,25 @@ func fileTypeName(filename string) string {
 		return "PPT 演示文稿"
 	default:
 		return "文件"
+	}
+}
+
+// touchSessionUpdatedAt refreshes a session's updated_at timestamp to now so
+// that the web-UI sidebar groups it into the correct time bucket (e.g. "今天").
+//
+// IM sessions are created once per channel/user pair and then reused for all
+// subsequent messages in that channel. Without this touch, updated_at stays at
+// the session creation time, so an ongoing conversation appears under "上周" or
+// "更早" instead of "今天".
+//
+// The update is best-effort: a failure is logged but never propagates to the
+// caller because missing a time-group update must never block the QA reply.
+func (s *Service) touchSessionUpdatedAt(ctx context.Context, sessionID string) {
+	if err := s.db.WithContext(ctx).
+		Model(&types.Session{}).
+		Where("id = ?", sessionID).
+		Update("updated_at", time.Now()).Error; err != nil {
+		logger.Warnf(ctx, "[IM] touchSessionUpdatedAt: failed to touch session %s: %v", sessionID, err)
 	}
 }
 
