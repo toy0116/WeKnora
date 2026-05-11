@@ -132,6 +132,28 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 		)
 	}
 
+	// Direction C: tag each KB chunk with its source-document doc_class
+	// (product / strategy / competitive / research / training / solution).
+	// Skips web-search chunks since classification keys off knowledge titles.
+	// Sets r.Metadata["doc_class"] so buildContextAttributes can emit it.
+	if p.config != nil && p.config.DocClasses != nil {
+		for _, r := range chatManage.MergeResult {
+			isWeb := strings.ToLower(r.KnowledgeSource) == "web_search" ||
+				r.ChunkType == string(types.ChunkTypeWebSearch)
+			if isWeb {
+				continue
+			}
+			docName := r.KnowledgeTitle
+			if docName == "" {
+				docName = r.KnowledgeFilename
+			}
+			if cls := p.config.DocClasses.Classify(docName); cls != "" {
+				r.Metadata = ensureMetadata(r.Metadata)
+				r.Metadata["doc_class"] = cls
+			}
+		}
+	}
+
 	var contextsBuilder strings.Builder
 
 	// Collect unique document metadata (title + description), once per knowledge
@@ -402,6 +424,14 @@ func buildContextAttributes(r *types.SearchResult) string {
 			base += fmt.Sprintf(` entity_owner="%s" entity_mismatch="true"`, escapeXMLAttr(owner))
 		} else {
 			base += ` entity_mismatch="true"`
+		}
+	}
+	// Append doc_class when the chat-pipeline classifier has stamped it. The
+	// LLM applies Rule 8 (doc-class trust hierarchy) to weigh product chunks
+	// against strategy / competitive / research / training / solution chunks.
+	if r.Metadata != nil {
+		if cls := r.Metadata["doc_class"]; cls != "" {
+			base += fmt.Sprintf(` doc_class="%s"`, escapeXMLAttr(cls))
 		}
 	}
 	return base

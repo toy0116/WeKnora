@@ -85,23 +85,32 @@ type GrepChunksTool struct {
 	// mode and classic RAG mode produce consistent warnings). Optional —
 	// when nil, the tool degrades to its pre-fix output shape.
 	entityAliases *config.EntityAliasConfig
+	// docClasses drives the doc_class attribute on each returned chunk,
+	// classifying its source document by narrative role (product / strategy
+	// / competitive / research / training / solution). The LLM then applies
+	// Rule 13 of the system prompt to decide whether the chunk is
+	// authoritative for product-spec claims. Optional — nil = no tagging.
+	docClasses *config.DocClassConfig
 
 	mu          sync.Mutex
 	seenChunks  map[string]bool
 }
 
 // NewGrepChunksTool creates a new grep chunks tool.
-// entityAliases may be nil — the tool degrades to its pre-fix output shape.
+// entityAliases and docClasses may both be nil — the tool degrades to its
+// pre-fix output shape.
 func NewGrepChunksTool(
 	db *gorm.DB,
 	searchTargets types.SearchTargets,
 	entityAliases *config.EntityAliasConfig,
+	docClasses *config.DocClassConfig,
 ) *GrepChunksTool {
 	return &GrepChunksTool{
 		BaseTool:      grepChunksTool,
 		db:            db,
 		searchTargets: searchTargets,
 		entityAliases: entityAliases,
+		docClasses:    docClasses,
 		seenChunks:    make(map[string]bool),
 	}
 }
@@ -444,6 +453,9 @@ func (t *GrepChunksTool) formatOutput(
 				t.entityAliases,
 			)
 		}
+		// Doc-class attribute — see system_prompt Rule 13 for trust hierarchy.
+		docClassAttr := BuildDocClassAttr(r.KnowledgeTitle, t.docClasses)
+		extraAttrs := mismatchAttrs + docClassAttr
 
 		t.mu.Lock()
 		seen := t.seenChunks[r.ID]
@@ -458,7 +470,7 @@ func (t *GrepChunksTool) formatOutput(
 				xmlEscape(r.KnowledgeTitle),
 				r.ChunkIndex,
 				r.MatchScore,
-				mismatchAttrs,
+				extraAttrs,
 			))
 			for _, q := range queries {
 				if c := counts[q]; c > 0 {

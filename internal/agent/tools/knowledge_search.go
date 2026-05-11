@@ -1203,6 +1203,15 @@ func (t *KnowledgeSearchTool) formatOutput(
 				t.config.EntityAliases,
 			)
 		}
+		// Doc-class attribute — surfaces the source document's narrative role
+		// (product / strategy / competitive / research / training / solution).
+		// LLM applies the trust hierarchy from system-prompt Rule 13.
+		docClassAttr := ""
+		if t.config != nil {
+			docClassAttr = BuildDocClassAttr(result.KnowledgeTitle, t.config.DocClasses)
+		}
+		// Combined "after score=…" attribute payload.
+		extraAttrs := mismatchAttrs + docClassAttr
 
 		if seen {
 			// Compact rendering for chunks we already returned in a previous
@@ -1218,7 +1227,7 @@ func (t *KnowledgeSearchTool) formatOutput(
 				xmlEscape(result.KnowledgeTitle),
 				result.Score,
 				xmlEscape(result.SourceQuery),
-				mismatchAttrs,
+				extraAttrs,
 			))
 			ob.WriteString("<note>(content omitted, already returned in a previous knowledge_search call this session)</note>\n")
 			ob.WriteString("</chunk>\n")
@@ -1233,7 +1242,7 @@ func (t *KnowledgeSearchTool) formatOutput(
 				xmlEscape(result.KnowledgeTitle),
 				result.Score,
 				xmlEscape(result.SourceQuery),
-				mismatchAttrs,
+				extraAttrs,
 			))
 			if snippet := extractSnippetForQueries(result.Content, queries); snippet != "" {
 				ob.WriteString(fmt.Sprintf("<match_snippet>%s</match_snippet>\n", xmlEscape(snippet)))

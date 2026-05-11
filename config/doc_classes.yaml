@@ -1,0 +1,135 @@
+# Document-class registry for retrieval-time chunk tagging.
+#
+# Why this exists:
+#   A knowledge base accumulates documents of fundamentally different
+#   epistemic status — datasheets vs strategy roadmaps vs competitor
+#   benchmarks vs industry trend reports. To an LLM doing RAG they all
+#   look like equally-authoritative chunks, and you get hallucinations
+#   like "Robustel E2C supports Kafka" because (a) some Robustel strategy
+#   roadmap mentions Kafka as a future direction, and (b) a competitor
+#   benchmark file mentions Kafka as a competitor's feature. The LLM
+#   collapses both into "current Robustel capability".
+#
+# How it works:
+#   Each chunk rendered to the LLM gets a `doc_class="..."` XML attribute
+#   derived from its source document's title via the first-matching
+#   pattern below. The agent / RAG system prompt then references the
+#   trust hierarchy in this file to decide whether the chunk is
+#   factual ground truth or a less-trusted narrative class.
+#
+# Pattern semantics:
+#   - Patterns are Go regexp (RE2) syntax. Use `(?i)` for case-insensitive.
+#   - First-match-wins ordering: more specific classes go BEFORE more
+#     general ones (e.g. "product" before "competitive" — a datasheet
+#     might be titled "X vs Y competitive analysis" but we'd rather call
+#     it competitive than product; conversely a `RT137_DS_*.pdf` is
+#     always a datasheet regardless of any keyword overlap).
+#   - Match target: the document's `title` field as stored in the
+#     `knowledges` table. Filename extension is included.
+#   - A document with no matching pattern receives `doc_class=""`
+#     (unclassified). The prompt rule treats unclassified as
+#     "prefer-product-when-available, otherwise lower trust".
+#
+# When to edit this file:
+#   - When a new document class shows up in your KB that doesn't fit any
+#     existing pattern, add a new entry.
+#   - When a specific document is misclassified, prefer fixing its TITLE
+#     before adding a pattern exception — titles drive far more than
+#     this classifier and a good title benefits search too.
+
+classes:
+  # ── product: authoritative datasheets / manuals / SDK / OS docs ──────────
+  # TRUSTED for product specs and feature lists.
+  - name: product
+    description: "Authoritative product datasheets, user manuals, OS / SDK docs. TRUSTED for product facts."
+    title_patterns:
+      - "(?i)^RT\\d{3,}_DS_"            # Robustel datasheet code prefix (RT137_DS_R1520LG_V1.0.5.pdf)
+      - "(?i)^RT_(SM|UG)_"              # RobustOS Software Manual / User Guide (RT_SM_RobustOS Pro...)
+      - "(?i)^RT_DS"
+      - "(?i)RobustOS.*(Manual|Guide)"
+      - "(?i)RCMS.*User Guide"
+      - "(?i)Cloud_.*User Guide"
+      - "(?i)CLI\\s+Guide"
+      - "(?i)\\bDatasheet\\b"
+      - "(?i)\\bSpec(ification|sheet)s?\\b"
+      - "(?i)\\bAPI\\b.*(reference|guide|manual)"
+      - "(?i)产品.{0,2}手册"
+      - "(?i)用户.{0,2}(手册|指南)"
+      - "(?i)开发.{0,2}指南"
+      - "(?i)配置.{0,2}指南"
+
+  # ── competitive: competitor / benchmark / 借鉴 analyses ──────────────────
+  # Content describes COMPETITORS, not Robustel. Must NOT be cited as Robustel features.
+  - name: competitive
+    description: "Competitor analyses, benchmark reports, vs-comparisons. Describes competitor capabilities, not Robustel's."
+    title_patterns:
+      - "(?i)竞品.{0,3}分析"
+      - "(?i)基准.{0,3}分析"
+      - "(?i)benchmark"
+      - "(?i)\\bvs\\.?\\b|对比"
+      - "(?i)借鉴"
+      - "(?i)market\\s+positioning"
+      - "(?i)In-Depth Analysis of"
+      - "(?i)Litmus|Kepware|KepServerEX|EMQX|NeuronEX|EdgeLink|N3uron|Ignition|Teltonika|Honeywell|Niagara|Tridium|N3uron"
+      - "(?i)应对.*市场竞争"
+      - "(?i)与.+(对比|比较|集成|框架).*(可行性|分析|策略|应用)"
+
+  # ── research: industry research / trend reports / market sizing ────────
+  # INDUSTRY-WIDE patterns, NOT Robustel-specific features.
+  # ORDERED BEFORE strategy: titles like "深度战略研究报告" are research first
+  # ("战略" is a descriptor of analytical depth, not the doc's nature).
+  - name: research
+    description: "Industry research, trend reports, market analyses. Describes industry-wide patterns, not Robustel features."
+    title_patterns:
+      - "(?i)研究报告|research.{0,2}report"
+      - "(?i)行业.{0,2}(研究|报告)"
+      - "(?i)市场.{0,2}(研究|分析|洞察|格局|空间)"
+      - "(?i)趋势.{0,2}报告|trend"
+      - "(?i)深度.{0,2}(战略)?.{0,2}研究"
+      - "(?i)深度.{0,2}洞察|deep.{0,2}dive"
+      - "(?i)应用架构"
+      - "(?i)市场.{0,2}规模"
+
+  # ── strategy: roadmaps / GTM / sales playbooks / market-entry plans ─────
+  # ASPIRATIONAL — describes what Robustel PLANS to do, not what it CURRENTLY supports.
+  - name: strategy
+    description: "Strategy / roadmap / GTM / market-entry / sales-playbook. Aspirational; describes plans, not current capabilities."
+    title_patterns:
+      - "(?i)战略|strategy|strategic"
+      - "(?i)路线图|roadmap"
+      - "(?i)演进路.{0,3}(径|线)"
+      - "(?i)行动纲领"
+      - "(?i)作战.{0,4}(地图|计划|路线)?|playbook"
+      - "(?i)\\bGTM\\b|go.{0,2}to.{0,2}market"
+      - "(?i)进入(策略|计划)|market.{0,2}entry"
+      - "(?i)PMM"
+      - "(?i)升级路径"
+      - "(?i)增长蓝图|growth.{0,2}blueprint"
+      - "(?i)产品战略|product.{0,2}strategy"
+      - "(?i)销售.{0,2}转型"
+      - "(?i)推广.{0,3}(策略|方案)"
+      - "(?i)项目.{0,2}的?.{0,2}全栈?战略"
+      - "(?i)蓝图|blueprint"
+      - "(?i)定位.{0,4}(战略|策略)"
+      - "(?i)市场机遇分析"
+
+  # ── training: internal training / onboarding / sales kits ──────────────
+  - name: training
+    description: "Internal training / new-hire / sales-rep materials. Not product spec."
+    title_patterns:
+      - "(?i)培训.{0,2}手册"
+      - "(?i)训练营"
+      - "(?i)新人.{0,2}(手册|训练|入职)"
+      - "(?i)\\bMDR\\b"
+      - "(?i)开发信"
+      - "(?i)onboarding"
+
+  # ── solution: customer pitches / solution briefs / vertical proposals ─
+  # Sales-facing; specifics may be embellished. Verify against product docs.
+  - name: solution
+    description: "Solution briefs / customer pitches / vertical-application proposals. Verify specifics against product docs."
+    title_patterns:
+      - "(?i)解决方案|solution"
+      - "(?i)客户.{0,2}画像|customer.{0,2}profile"
+      - "(?i)\\bpitch\\b"
+      - "(?i)应用方案|application.{0,2}(brief|proposal)"

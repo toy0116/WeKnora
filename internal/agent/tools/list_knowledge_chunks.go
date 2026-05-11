@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	configpkg "github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -77,6 +78,10 @@ type ListKnowledgeChunksTool struct {
 	chunkService     interfaces.ChunkService
 	knowledgeService interfaces.KnowledgeService
 	searchTargets    types.SearchTargets // Pre-computed unified search targets with KB-tenant mapping
+	// docClasses surfaces the source-document narrative role on the parent
+	// <knowledge_chunks> element so the LLM sees doc_class up-front before
+	// reading any chunk. Optional — nil falls back to silent rendering.
+	docClasses *configpkg.DocClassConfig
 }
 
 // NewListKnowledgeChunksTool creates a new tool instance.
@@ -84,12 +89,14 @@ func NewListKnowledgeChunksTool(
 	knowledgeService interfaces.KnowledgeService,
 	chunkService interfaces.ChunkService,
 	searchTargets types.SearchTargets,
+	docClasses *configpkg.DocClassConfig,
 ) *ListKnowledgeChunksTool {
 	return &ListKnowledgeChunksTool{
 		BaseTool:         listKnowledgeChunksTool,
 		chunkService:     chunkService,
 		knowledgeService: knowledgeService,
 		searchTargets:    searchTargets,
+		docClasses:       docClasses,
 	}
 }
 
@@ -301,8 +308,11 @@ func (t *ListKnowledgeChunksTool) buildOutput(
 	if knowledgeTitle != "" {
 		titleAttr = fmt.Sprintf(" title=\"%s\"", knowledgeTitle)
 	}
-	fmt.Fprintf(&b, "<knowledge_chunks knowledge_id=\"%s\"%s total=\"%d\" fetched=\"%d\">\n",
-		knowledgeID, titleAttr, total, fetched)
+	// Surface doc_class on the parent element so the LLM applies Rule 13's
+	// trust hierarchy when reading the full content below.
+	docClassAttr := BuildDocClassAttr(knowledgeTitle, t.docClasses)
+	fmt.Fprintf(&b, "<knowledge_chunks knowledge_id=\"%s\"%s%s total=\"%d\" fetched=\"%d\">\n",
+		knowledgeID, titleAttr, docClassAttr, total, fetched)
 
 	if fetched == 0 {
 		b.WriteString("</knowledge_chunks>")

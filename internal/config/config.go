@@ -31,6 +31,7 @@ type Config struct {
 	IM              *IMConfig              `yaml:"im"               json:"im"`
 	Agent           *AgentConfig           `yaml:"agent"            json:"agent"`
 	EntityAliases   *EntityAliasConfig     `yaml:"-"                json:"entity_aliases,omitempty"`
+	DocClasses      *DocClassConfig        `yaml:"-"                json:"doc_classes,omitempty"`
 	// ConfigDir is the directory that contains config.yaml; set at load time.
 	// Used by handlers that need to read/write sibling config files at runtime.
 	ConfigDir string `yaml:"-" json:"-"`
@@ -414,6 +415,13 @@ func LoadConfig() (*Config, error) {
 		fmt.Printf("Warning: failed to load entity aliases: %v\n", err)
 	} else if aliases != nil {
 		cfg.EntityAliases = aliases
+	}
+
+	// Load document-class registry from doc_classes.yaml (optional)
+	if classes, err := loadDocClasses(configDir); err != nil {
+		fmt.Printf("Warning: failed to load doc classes: %v\n", err)
+	} else if classes != nil {
+		cfg.DocClasses = classes
 	}
 
 	// Load built-in agent definitions (i18n-aware) from builtin_agents.yaml
