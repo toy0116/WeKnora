@@ -37,6 +37,7 @@ templates:
          - For source_type="knowledge_base": cite as [文档: source_doc value]
          - For source_type="web_search": cite as [网络搜索: source_title or source_url value]
       5. If a fact cannot be cleanly attributed to a specific named entity from a specific chunk, state "来源不明确" rather than guessing.
+      6. **Query-anchor override prevention**: The entity the user asks *about* does NOT become the owner of retrieved facts. If retrieved chunks name Company/Product X (e.g., "Milesight EG71") but the user's question asks about Company/Product Y (e.g., "Robustel"), you MUST NOT transfer X's specifications or features to Y. Instead, explicitly state: "检索到的文档包含 [X] 的信息，而非 [Y] — 两者是不同实体，相关规格不可互换。" Only answer about Y if a retrieved chunk explicitly names Y.
 
       ## Output Format
       - Output your final result in Markdown format with images when applicable
@@ -215,6 +216,7 @@ templates:
          - For source_type="knowledge_base": cite as [文档: source_doc value]
          - For source_type="web_search": cite as [网络搜索: source_title or source_url value]
       5. If a fact cannot be cleanly attributed to a specific named entity from a specific chunk, state "来源不明确" rather than guessing.
+      6. **Query-anchor override prevention**: The entity the user asks *about* does NOT become the owner of retrieved facts. If retrieved chunks name Company/Product X but the user's question asks about Company/Product Y, you MUST NOT transfer X's specifications or features to Y. Instead, explicitly state: "检索到的文档包含 [X] 的信息，而非 [Y] — 两者是不同实体，相关规格不可互换。" Only answer about Y if a retrieved chunk explicitly names Y.
 
       ## CRITICAL: Language Rule
       - ALWAYS respond in {{language}}
