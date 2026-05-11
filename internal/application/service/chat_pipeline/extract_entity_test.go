@@ -97,16 +97,24 @@ func TestFormater_ParseGraph_FenceVariants(t *testing.T) {
 			errContains: "empty",
 		},
 		{
-			name:        "fenced but body is invalid JSON",
-			input:       "```json\nnot json at all\n```",
-			wantErr:     true,
-			errContains: "parse",
+			// Per resilience fix 2ba140a8: malformed JSON inside a well-formed
+			// fence is treated as an empty graph (warn + return), not an error.
+			// Retrying inherently-malformed LLM output (truncated max_tokens
+			// payloads on mimo-v2.5-pro) only wastes tokens, so parseOutput
+			// degrades gracefully instead of propagating the unmarshal error.
+			name:      "fenced but body is invalid JSON",
+			input:     "```json\nnot json at all\n```",
+			wantNodes: 0,
+			wantRels:  0,
 		},
 		{
-			name:        "no recoverable JSON, only prose",
-			input:       "Sorry, I cannot extract a graph from this text.",
-			wantErr:     true,
-			errContains: "parse",
+			// Same graceful-degradation contract as above: no recoverable JSON
+			// → empty graph, not an error. The chunk is still indexed via
+			// regular text embeddings; only the entity-extraction layer is empty.
+			name:      "no recoverable JSON, only prose",
+			input:     "Sorry, I cannot extract a graph from this text.",
+			wantNodes: 0,
+			wantRels:  0,
 		},
 	}
 
