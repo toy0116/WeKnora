@@ -194,6 +194,15 @@ type CustomAgentConfig struct {
 	MultiTurnEnabled bool `yaml:"multi_turn_enabled" json:"multi_turn_enabled"`
 	// Number of history turns to keep in context
 	HistoryTurns int `yaml:"history_turns" json:"history_turns"`
+	// Whether to role-asymmetrically compact assistant messages in chat
+	// history before feeding the next turn. Replaces each long past
+	// assistant message with a structured <assistant_turn> outline that
+	// preserves intent + format + citations but strips specific factual
+	// claims, so past-turn hallucinations don't reinforce themselves
+	// across long IM sessions. Recommended for long-lived wecom/wechat
+	// agents; off by default for stateless or short conversational
+	// agents. See internal/agent/memory/compactor.go for the algorithm.
+	AssistantContextCompaction bool `yaml:"assistant_context_compaction" json:"assistant_context_compaction,omitempty"`
 
 	// ===== Retrieval Strategy Settings (for both modes) =====
 	// Embedding/Vector retrieval top K

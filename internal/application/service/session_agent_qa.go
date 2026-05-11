@@ -141,6 +141,28 @@ func (s *sessionService) AgentQA(
 	}
 	logger.Infof(ctx, "Loaded %d messages from LLM context manager", len(llmContext))
 
+	// Role-asymmetric compaction: every long assistant message is replaced
+	// with a structured outline that preserves intent/format/citations but
+	// strips specific factual claims. This is the first-principles defence
+	// against "conversation poisoning" — past assistant hallucinations
+	// re-entering context every turn as authoritative-looking statements.
+	//
+	// Runs BEFORE the existing Consolidator so that
+	//   (a) the consolidator sees already-shrunk content (likely no need to
+	//       summarise further), and
+	//   (b) any future-turn summary built by the consolidator inherits the
+	//       outline form, not the original facts.
+	//
+	// Only runs when explicitly enabled on the agent config; default off
+	// to preserve current behaviour for non-IM agents.
+	if agentConfig.AssistantContextCompaction {
+		compactor := agentmemory.NewRoleAsymmetricCompactor(summaryModel)
+		preCount := len(llmContext)
+		llmContext = compactor.Compact(ctx, llmContext)
+		logger.Infof(ctx, "[Compactor] applied role-asymmetric compaction: %d messages processed",
+			preCount)
+	}
+
 	// Proactively consolidate context when session history is long.
 	// Long-running IM sessions (e.g. WeChat Work groups) cannot easily start a new
 	// session, so we summarise older turns in-place before they overflow the LLM
@@ -237,6 +259,7 @@ func (s *sessionService) buildAgentConfig(
 		WebSearchProviderID:         customAgent.Config.WebSearchProviderID,
 		MultiTurnEnabled:            customAgent.Config.MultiTurnEnabled,
 		HistoryTurns:                customAgent.Config.HistoryTurns,
+		AssistantContextCompaction:  customAgent.Config.AssistantContextCompaction,
 		MCPSelectionMode:            customAgent.Config.MCPSelectionMode,
 		MCPServices:                 customAgent.Config.MCPServices,
 		Thinking:                    customAgent.Config.Thinking,

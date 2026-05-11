@@ -62,6 +62,20 @@ type AgentConfig struct {
 	// Whether to execute independent tool calls in parallel (default: false).
 	// When enabled and the LLM returns multiple tool calls, they run concurrently via errgroup.
 	ParallelToolCalls bool `json:"parallel_tool_calls,omitempty"`
+
+	// Whether to role-asymmetrically compact assistant messages in chat history
+	// before feeding into the next turn's context. Compaction replaces each long
+	// assistant message with a structured <assistant_turn> outline that preserves
+	// user intent + output format + citations, but strips specific factual claims.
+	// This prevents prior-turn hallucinations from being treated as authoritative
+	// priors in subsequent turns — the failure mode observed in long wecom IM
+	// sessions where the same query was asked repeatedly and produced the same
+	// misattribution each time.
+	//
+	// Defaults to false for backward compatibility; flip to true on long-running
+	// IM-bound agents like mini悟. See internal/agent/memory/compactor.go for
+	// the algorithm.
+	AssistantContextCompaction bool `json:"assistant_context_compaction,omitempty"`
 }
 
 // SessionAgentConfig represents session-level agent configuration
