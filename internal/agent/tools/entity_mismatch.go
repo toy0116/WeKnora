@@ -94,8 +94,26 @@ func TagChunkMismatchAttrs(query string, scanText string, aliases *config.Entity
 	if owner == "" {
 		return ` entity_mismatch="true"`
 	}
-	return fmt.Sprintf(` entity_owner="%s" entity_mismatch="true"`,
-		xmlAttrEscape(owner))
+	return fmt.Sprintf(` entity_owner="%s"%s entity_mismatch="true"`,
+		xmlAttrEscape(owner), entityAliasesAttr(owner, aliases))
+}
+
+// entityAliasesAttr returns ` entity_aliases="X1,X2,X3"` (leading space
+// included) when the brand has alternate forms beyond its canonical
+// name, or "" when there are no alternates / canonical not found.
+//
+// The attribute carries the brand's cross-lingual aliases (e.g.
+// "星纵物联,星纵" for Milesight) so the LLM can answer "what's brand X's
+// Chinese name" without fabricating transliterations. The system prompt
+// instructs the model to cite ONLY from this attribute for alternate-
+// name queries — see agent_system_prompt.yaml Rule 7 / 11 / 13.
+func entityAliasesAttr(canonical string, aliases *config.EntityAliasConfig) string {
+	forms := aliases.FormsForBrand(canonical)
+	if len(forms) <= 1 {
+		return "" // only the canonical itself — nothing to surface
+	}
+	others := forms[1:] // skip canonical (already in entity_owner)
+	return fmt.Sprintf(` entity_aliases="%s"`, xmlAttrEscape(strings.Join(others, ",")))
 }
 
 // BuildEntityWarningBlock returns an <entity_warning> XML block when the
@@ -183,7 +201,8 @@ func TagChunkOwnerAttr(scanText string, aliases *config.EntityAliasConfig) strin
 	if owner == "" {
 		return ""
 	}
-	return fmt.Sprintf(` entity_owner="%s"`, xmlAttrEscape(owner))
+	return fmt.Sprintf(` entity_owner="%s"%s`,
+		xmlAttrEscape(owner), entityAliasesAttr(owner, aliases))
 }
 
 // xmlAttrEscape is a minimal XML attribute escaper for the small set of

@@ -224,6 +224,52 @@ func TestDetectAttributionConflicts_TechnologyClaimIsNotABrandClaim(t *testing.T
 	}
 }
 
+func TestFormsForBrand_ReturnsFullAliasList(t *testing.T) {
+	cfg := fixtureAliases()
+	got := cfg.FormsForBrand("Robustel")
+	want := []string{"Robustel", "鲁邦通"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("FormsForBrand(Robustel) = %v, want %v", got, want)
+	}
+	got = cfg.FormsForBrand("Milesight")
+	wantMilesight := []string{"Milesight", "星纵物联", "星纵"}
+	if !reflect.DeepEqual(got, wantMilesight) {
+		t.Errorf("FormsForBrand(Milesight) = %v, want %v", got, wantMilesight)
+	}
+}
+
+func TestFormsForBrand_UnknownCanonicalReturnsNil(t *testing.T) {
+	cfg := fixtureAliases()
+	if got := cfg.FormsForBrand("Acme"); got != nil {
+		t.Errorf("unknown brand must return nil, got %v", got)
+	}
+	if got := cfg.FormsForBrand(""); got != nil {
+		t.Errorf("empty canonical must return nil, got %v", got)
+	}
+}
+
+func TestFormsForBrand_NilSafe(t *testing.T) {
+	var nilCfg *EntityAliasConfig
+	if got := nilCfg.FormsForBrand("Robustel"); got != nil {
+		t.Errorf("nil config must return nil, got %v", got)
+	}
+}
+
+func TestFormsForBrand_SkipsTechnologyGroups(t *testing.T) {
+	// LoRaWAN is a Kind=technology group; even if asked by its canonical
+	// name FormsForBrand must NOT return it (brand-only contract).
+	cfg := &EntityAliasConfig{
+		Groups: []EntityAliasGroup{
+			{Forms: []string{"Robustel"}},
+			{Forms: []string{"LoRaWAN", "LoRa"}, Kind: "technology"},
+		},
+	}
+	cfg.Build()
+	if got := cfg.FormsForBrand("LoRaWAN"); got != nil {
+		t.Errorf("technology group must NOT be returned as brand, got %v", got)
+	}
+}
+
 func TestExpand_DoesNotMixProductsIntoQuery(t *testing.T) {
 	// Critical safety check: query expansion must NOT inject product model
 	// numbers into BM25 queries (would corrupt retrieval). Only Form↔Form

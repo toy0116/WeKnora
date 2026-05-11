@@ -15,7 +15,7 @@ func testAliases() *config.EntityAliasConfig {
 				Products: []string{"EG5120", "R1511LG", "RCMS"},
 			},
 			{
-				Forms:    []string{"Milesight", "星纵物联"},
+				Forms:    []string{"Milesight", "星纵物联", "星纵"},
 				Products: []string{"EG71", "UG65"},
 			},
 		},
@@ -185,6 +185,61 @@ func TestTagChunkOwnerAttr_NoBrandProducesNothing(t *testing.T) {
 func TestTagChunkOwnerAttr_NilAliasesSafe(t *testing.T) {
 	if got := TagChunkOwnerAttr("Milesight EG71 datasheet", nil); got != "" {
 		t.Errorf("nil aliases must be a no-op, got %q", got)
+	}
+}
+
+func TestTagChunkOwnerAttr_EmitsEntityAliasesWhenAlternatesExist(t *testing.T) {
+	aliases := testAliases() // Milesight group has 3 forms: Milesight, 星纵物联, 星纵
+	scan := chunkScanSnippet(
+		"Milesight EG71 Datasheet",
+		"eg71-datasheet-en.pdf",
+		"Milesight EG71 is a powerful edge IoT gateway...",
+	)
+	got := TagChunkOwnerAttr(scan, aliases)
+	if !strings.Contains(got, `entity_owner="Milesight"`) {
+		t.Errorf("missing entity_owner, got %q", got)
+	}
+	if !strings.Contains(got, `entity_aliases="星纵物联,星纵"`) {
+		t.Errorf("expected entity_aliases listing 星纵物联 and 星纵, got %q", got)
+	}
+}
+
+func TestTagChunkOwnerAttr_NoAliasesAttrWhenBrandHasNoAlternates(t *testing.T) {
+	// Build a config where the brand has a single Form — the LLM has no
+	// alternate-name decision to make, so no entity_aliases attribute.
+	cfg := &config.EntityAliasConfig{
+		Groups: []config.EntityAliasGroup{
+			{Forms: []string{"OnlyOneNameCo"}, Products: []string{"OO100"}},
+		},
+	}
+	cfg.Build()
+	scan := chunkScanSnippet("OO100 spec", "", "OnlyOneNameCo OO100 features...")
+	got := TagChunkOwnerAttr(scan, cfg)
+	if !strings.Contains(got, `entity_owner="OnlyOneNameCo"`) {
+		t.Errorf("missing entity_owner, got %q", got)
+	}
+	if strings.Contains(got, "entity_aliases") {
+		t.Errorf("single-form brand must NOT emit entity_aliases, got %q", got)
+	}
+}
+
+func TestTagChunkMismatchAttrs_IncludesEntityAliasesOnMismatch(t *testing.T) {
+	aliases := testAliases()
+	scan := chunkScanSnippet(
+		"Milesight EG71 Datasheet",
+		"eg71-datasheet-en.pdf",
+		"Milesight EG71 features 8 universal inputs and PT1000 sensor support...",
+	)
+	// Query anchors Robustel; chunk owner is Milesight — mismatch fires.
+	attrs := TagChunkMismatchAttrs("Robustel EG71 spec", scan, aliases)
+	if !strings.Contains(attrs, `entity_owner="Milesight"`) {
+		t.Errorf("missing entity_owner, got %q", attrs)
+	}
+	if !strings.Contains(attrs, `entity_aliases="星纵物联,星纵"`) {
+		t.Errorf("mismatch attrs must surface aliases too, got %q", attrs)
+	}
+	if !strings.Contains(attrs, `entity_mismatch="true"`) {
+		t.Errorf("missing entity_mismatch, got %q", attrs)
 	}
 }
 

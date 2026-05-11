@@ -239,6 +239,46 @@ func TestMergeFromWiki_RejectsBrandLinkBuriedDeepInOutLinks(t *testing.T) {
 	}
 }
 
+func TestMergeFromWiki_FiltersSingleCharAliasNoise(t *testing.T) {
+	// Regression: a wiki entity_milesight page had aliases=["M"] (a stray
+	// letter auto-extracted by the entity miner). MergeFromWiki used to
+	// promote it as a brand alias, producing `entity_aliases="...,M"` in
+	// tool output and confusing the LLM. Min-length filter (>= 2 runes)
+	// must drop it while preserving real short aliases like "ABB" or "星纵".
+	cfg := &EntityAliasConfig{
+		Groups: []EntityAliasGroup{
+			{Forms: []string{"Milesight"}},
+		},
+	}
+	cfg.Build()
+
+	pages := []*types.WikiPage{
+		mkPage("entity/milesight", "Milesight", []string{"M", "星纵", "Xiamen Milesight"}, nil),
+	}
+	cfg.MergeFromWiki(pages)
+
+	for _, f := range cfg.RuntimeGroups()[0].Forms {
+		if f == "M" {
+			t.Errorf("single-letter 'M' alias must be filtered, got Forms=%v", cfg.RuntimeGroups()[0].Forms)
+		}
+	}
+	// Real aliases must still pass.
+	rt := cfg.RuntimeGroups()[0].Forms
+	gotXiamen := false
+	gotXingZong := false
+	for _, f := range rt {
+		if f == "Xiamen Milesight" {
+			gotXiamen = true
+		}
+		if f == "星纵" {
+			gotXingZong = true
+		}
+	}
+	if !gotXiamen || !gotXingZong {
+		t.Errorf("legitimate aliases must survive: %v", rt)
+	}
+}
+
 func TestMergeFromWiki_DoesNotMutateYAMLGroups(t *testing.T) {
 	// Core invariant of the yaml/runtime split: MergeFromWiki must NEVER
 	// touch the Groups slice. The Web-UI handler reads Groups for the

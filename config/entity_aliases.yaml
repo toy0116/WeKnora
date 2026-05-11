@@ -26,7 +26,10 @@
 
 groups:
   # ── Companies (Robustel ecosystem) ───────────────────────────────────────
-  - forms: ["鲁邦通", "Robustel"]
+  # Forms include full English + Chinese registered names so the LLM can
+  # answer "what's Robustel's Chinese name" / "鲁邦通的全称是什么" without
+  # fabricating transliterations.
+  - forms: ["鲁邦通", "Robustel", "广州鲁邦通物联网科技股份有限公司", "Guangzhou Robustel Co. Ltd"]
     products:
       # 5G/4G industrial edge gateways
       - "EG5120"
@@ -39,7 +42,10 @@ groups:
       # Cloud management platform
       - "RCMS"
 
-  - forms: ["Milesight", "星纵物联", "星纵"]
+  # Milesight is the Chinese vendor 厦门星纵物联科技有限公司 — fully-spelled
+  # forms here prevent the LLM from fabricating phonetic-sounding 中文 names
+  # (镁伽 / 锐谷 / 迈世 etc) when asked for the brand's Chinese name.
+  - forms: ["Milesight", "星纵物联", "星纵", "厦门星纵物联科技有限公司", "Xiamen Milesight IoT Co. Ltd"]
     products:
       # LoRaWAN gateways & building-automation IoT devices
       - "EG71"

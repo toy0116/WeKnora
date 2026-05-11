@@ -101,9 +101,18 @@ func tagEntityMismatches(
 		r.Metadata["entity_mismatch"] = "true"
 
 		// Record the primary detected entity in the chunk (first group found).
+		var ownerCanonical string
 		for _, name := range chunkGroups {
 			r.Metadata["entity_owner"] = name
+			ownerCanonical = name
 			break
+		}
+		// Stamp the brand's full alias list as a comma-separated string so
+		// buildContextAttributes (and downstream LLM prompts) can surface
+		// `entity_aliases="X1,X2,X3"` — used by Rule 7 to answer
+		// "what's X's Chinese name" without fabricating transliterations.
+		if forms := aliases.FormsForBrand(ownerCanonical); len(forms) > 1 {
+			r.Metadata["entity_aliases"] = strings.Join(forms[1:], ",")
 		}
 
 		mismatchCount++

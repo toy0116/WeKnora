@@ -196,21 +196,38 @@ func pageMatchesAnyForm(p *types.WikiPage, forms []string) bool {
 }
 
 // candidateFormsFromPage returns Title + Aliases of a wiki page as a
-// candidate-forms list. Empty strings are filtered.
+// candidate-forms list. Empty strings + single-rune aliases are filtered.
+//
+// The single-rune filter defends against degenerate wiki entity-extraction
+// output that captures a stray letter (e.g. "M" got auto-extracted as a
+// Milesight alias from a sentence-initial letter "Milesight…"). Real
+// brand names are never one character long — ABB / ZTE / 星纵 etc. are
+// all ≥ 2.
 func candidateFormsFromPage(p *types.WikiPage) []string {
 	if p == nil {
 		return nil
 	}
 	out := make([]string, 0, 1+len(p.Aliases))
-	if t := strings.TrimSpace(p.Title); t != "" {
+	if t := strings.TrimSpace(p.Title); t != "" && runeLen(t) >= 2 {
 		out = append(out, t)
 	}
 	for _, a := range p.Aliases {
-		if a = strings.TrimSpace(a); a != "" {
+		a = strings.TrimSpace(a)
+		if a != "" && runeLen(a) >= 2 {
 			out = append(out, a)
 		}
 	}
 	return out
+}
+
+// runeLen returns the rune count of s — needed because single-CJK-char
+// strings have len(s) ≥ 3 (UTF-8) but should be rune-counted as 1.
+func runeLen(s string) int {
+	n := 0
+	for range s {
+		n++
+	}
+	return n
 }
 
 // linksIntoBrand returns true when one of the page's FIRST FEW outlinks

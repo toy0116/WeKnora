@@ -417,12 +417,21 @@ func buildContextAttributes(r *types.SearchResult) string {
 	}
 
 	// Append entity-mismatch signal when the tagger has flagged this chunk.
-	// The LLM sees entity_owner="Milesight" entity_mismatch="true" and can apply
-	// the Generation Task Guard (Rule 7) to avoid silently copying competitor specs.
+	// The LLM sees entity_owner="Milesight" entity_aliases="星纵物联,星纵"
+	// entity_mismatch="true" and applies the Generation Task Guard
+	// (Rule 7) to avoid silently copying competitor specs OR fabricating
+	// alternate-language brand names. The aliases list is stamped by
+	// entity_mismatch_tag.go alongside entity_owner so this function
+	// stays a pure metadata reader.
 	if r.Metadata != nil && r.Metadata["entity_mismatch"] == "true" {
 		owner := r.Metadata["entity_owner"]
 		if owner != "" {
-			base += fmt.Sprintf(` entity_owner="%s" entity_mismatch="true"`, escapeXMLAttr(owner))
+			aliasesAttr := ""
+			if a := r.Metadata["entity_aliases"]; a != "" {
+				aliasesAttr = fmt.Sprintf(` entity_aliases="%s"`, escapeXMLAttr(a))
+			}
+			base += fmt.Sprintf(` entity_owner="%s"%s entity_mismatch="true"`,
+				escapeXMLAttr(owner), aliasesAttr)
 		} else {
 			base += ` entity_mismatch="true"`
 		}

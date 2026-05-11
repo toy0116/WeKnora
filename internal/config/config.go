@@ -959,6 +959,37 @@ func (c *EntityAliasConfig) RuntimeGroups() []EntityAliasGroup {
 	return out
 }
 
+// FormsForBrand returns the full Forms slice (all cross-lingual /
+// cross-spelling aliases) for the brand whose canonical name (Forms[0])
+// is `canonical`. Includes the canonical name itself; callers strip it
+// if they only want alternates.
+//
+// Used by chunk-rendering code paths to emit an `entity_aliases` XML
+// attribute alongside `entity_owner`. Without surfacing the alias list,
+// an LLM asked "what is brand X's Chinese name" falls back to training-
+// data transliteration — a hallucination class observed in production
+// where Milesight got three different fake names (镁伽科技 / 锐谷通信 /
+// 迈世) in three consecutive answers, none matching the actual 星纵物联.
+//
+// Returns nil when the canonical name doesn't match any brand group
+// (typo / removed / technology group).
+func (c *EntityAliasConfig) FormsForBrand(canonical string) []string {
+	if c == nil || canonical == "" {
+		return nil
+	}
+	for _, g := range c.runtimeGroups {
+		if !g.IsBrand() || len(g.Forms) == 0 {
+			continue
+		}
+		if g.Forms[0] == canonical {
+			out := make([]string, len(g.Forms))
+			copy(out, g.Forms)
+			return out
+		}
+	}
+	return nil
+}
+
 // DetectGroups scans text for known alias forms OR product names and returns
 // a map of group-index → canonical name for every group whose forms or
 // products appear in text. This is the GENEROUS variant used for scanning
