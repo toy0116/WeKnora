@@ -112,6 +112,11 @@
                   <WebSearchSettings />
                 </div>
 
+                <!-- Entity Aliases -->
+                <div v-if="currentSection === 'entityaliases'" class="section">
+                  <EntityAliasSettings />
+                </div>
+
                 <!-- 消息管理 -->
                 <div v-if="currentSection === 'chathistory'" class="section">
                   <ChatHistorySettings />
@@ -178,6 +183,7 @@ import VectorStoreSettings from './VectorStoreSettings.vue'
 import ParserEngineSettings from './ParserEngineSettings.vue'
 import StorageEngineSettings from './StorageEngineSettings.vue'
 import WeKnoraCloudSettings from './WeKnoraCloudSettings.vue'
+import EntityAliasSettings from './EntityAliasSettings.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -194,6 +200,7 @@ const navItems = computed(() => [
   { key: 'weknoracloud', icon: '', label: 'WeKnora Cloud' },
   { key: 'models', icon: 'control-platform', label: t('settings.modelManagement') },
    { key: 'websearch', icon: 'search', label: t('settings.webSearchConfig')  },
+  { key: 'entityaliases', icon: 'swap', label: 'Entity Aliases' },
   { key: 'chathistory', icon: 'chat', label: t('chatHistorySettings.title') },
   { key: 'vectorstore', icon: 'data-base', label: t('settings.vectorStoreEngine') },
   { key: 'parser', icon: 'file-search', label: t('settings.parserEngine') },

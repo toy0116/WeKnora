@@ -72,6 +72,7 @@ type RouterParams struct {
 	VaultSyncHandler         *handler.VaultSyncHandler
 	QueueMonitorHandler      *handler.QueueMonitorHandler `optional:"true"`
 	BackupHandler            *handler.BackupHandler       `optional:"true"`
+	EntityAliasHandler       *handler.EntityAliasHandler
 }
 
 // NewRouter 创建新的路由
@@ -166,6 +167,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterEvaluationRoutes(v1, params.EvaluationHandler)
 		RegisterInitializationRoutes(v1, params.InitializationHandler)
 		RegisterSystemRoutes(v1, params.SystemHandler)
+		RegisterEntityAliasRoutes(v1, params.EntityAliasHandler)
 		RegisterMCPServiceRoutes(v1, params.MCPServiceHandler)
 		RegisterWebSearchRoutes(v1, params.WebSearchHandler)
 		RegisterWebSearchProviderRoutes(v1, params.WebSearchProviderHandler)
@@ -483,6 +485,15 @@ func RegisterInitializationRoutes(r *gin.RouterGroup, handler *handler.Initializ
 	r.POST("/initialization/extract/text-relation", handler.ExtractTextRelations)
 	r.POST("/initialization/extract/fabri-tag", handler.FabriTag)
 	r.POST("/initialization/extract/fabri-text", handler.FabriText)
+}
+
+// RegisterEntityAliasRoutes registers CRUD routes for the entity alias dictionary.
+func RegisterEntityAliasRoutes(r *gin.RouterGroup, h *handler.EntityAliasHandler) {
+	aliases := r.Group("/system/entity-aliases")
+	{
+		aliases.GET("", h.GetEntityAliases)
+		aliases.PUT("", h.UpdateEntityAliases)
+	}
 }
 
 // RegisterSystemRoutes registers system information routes

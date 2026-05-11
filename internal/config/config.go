@@ -31,6 +31,9 @@ type Config struct {
 	IM              *IMConfig              `yaml:"im"               json:"im"`
 	Agent           *AgentConfig           `yaml:"agent"            json:"agent"`
 	EntityAliases   *EntityAliasConfig     `yaml:"-"                json:"entity_aliases,omitempty"`
+	// ConfigDir is the directory that contains config.yaml; set at load time.
+	// Used by handlers that need to read/write sibling config files at runtime.
+	ConfigDir string `yaml:"-" json:"-"`
 }
 
 // AgentConfig represents the global agent settings.
@@ -388,8 +391,10 @@ func LoadConfig() (*Config, error) {
 	}
 	fmt.Printf("Using configuration file: %s\n", viper.ConfigFileUsed())
 
-	// 加载提示词模板（从目录或配置文件）
 	configDir := filepath.Dir(viper.ConfigFileUsed())
+	cfg.ConfigDir = configDir
+
+	// 加载提示词模板（从目录或配置文件）
 	promptTemplates, err := loadPromptTemplates(configDir)
 	if err != nil {
 		fmt.Printf("Warning: failed to load prompt templates from directory: %v\n", err)
