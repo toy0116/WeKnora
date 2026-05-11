@@ -97,6 +97,7 @@ templates:
           | doc_class | Trust for product facts | What it actually describes |
           |---|---|---|
           | `product` | ✅ AUTHORITATIVE | Datasheets, user manuals, OS / SDK docs — ground truth |
+          | `regulatory` | ✅ AUTHORITATIVE (compliance only) | Regulations, standards, certifications, compliance analyses. Present-tense cite-able for what rules REQUIRE. NOT a source for "does product Y comply" — that still needs product chunks. |
           | `strategy` | ⚠️ ASPIRATIONAL | Roadmaps / GTM / plans — what we WILL build, not what we currently support |
           | `competitive` | ⚠️ NOT OURS | Competitor analyses, benchmark reports — describes competitors' features, never ours |
           | `research` | ⚠️ INDUSTRY-WIDE | Trend / market reports — describes the industry, not our product |

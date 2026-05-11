@@ -58,6 +58,27 @@ classes:
       - "(?i)开发.{0,2}指南"
       - "(?i)配置.{0,2}指南"
 
+  # ── regulatory: compliance / standards / certifications / regulations ──
+  # AUTHORITATIVE for citing what regulations / standards REQUIRE (present-tense
+  # facts). Distinct from strategy (future plans) and research (industry-wide
+  # trends). NOT a substitute for product chunks when answering "does our
+  # product comply with X" — that still requires a product datasheet.
+  # ORDERED BEFORE research/strategy so titles like "EPDK 合规性分析" /
+  # "土耳其能源行业网络安全法规深度分析" classify as regulatory rather than
+  # collapsing into research (which has 研究/报告 patterns).
+  - name: regulatory
+    description: "Compliance / standards / regulations / certifications. Authoritative for what rules require; NOT a source for product compliance status."
+    title_patterns:
+      - "(?i)合规|compliance"
+      - "(?i)网络安全法规|cybersecurity.{0,3}regulation"
+      - "(?i)EPDK|GDPR|\\bNIS2?\\b|HIPAA"
+      - "(?i)海事.{0,2}(安全|cyber)|maritime.{0,2}(security|cyber)"
+      - "(?i)行业.{0,4}(法规|标准|规范).{0,4}(分析|要求)?"
+      - "(?i)(法规|标准|规范).{0,4}(分析|对标|要求)"
+      - "(?i)认证.{0,4}(分析|要求|对标)|certification.{0,4}(requirement|analysis)"
+      - "(?i)IEC[\\s-]?\\d{4,}"   # IEC 60870, IEC 61850, IEC 62443, …
+      - "(?i)IEC[\\s-]?6\\d{4}"   # short form
+
   # ── competitive: competitor / benchmark / 借鉴 analyses ──────────────────
   # Content describes COMPETITORS, not Robustel. Must NOT be cited as Robustel features.
   - name: competitive

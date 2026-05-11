@@ -16,6 +16,19 @@ func fixtureDocClassConfig() *DocClassConfig {
 					`(?i)\bDatasheet\b`,
 				},
 			},
+			// regulatory BEFORE competitive/research/strategy so titles like
+			// "EPDK 网络安全法规深度分析" don't collapse into research/strategy.
+			{
+				Name: "regulatory",
+				TitlePatterns: []string{
+					`(?i)合规|compliance`,
+					`(?i)网络安全法规`,
+					`(?i)EPDK|GDPR|\bNIS2?\b|HIPAA`,
+					`(?i)海事.{0,2}(安全|cyber)`,
+					`(?i)(法规|标准|规范).{0,4}(分析|对标|要求)`,
+					`(?i)IEC[\s-]?\d{4,}`,
+				},
+			},
 			{
 				Name: "competitive",
 				TitlePatterns: []string{
@@ -143,6 +156,47 @@ func TestClassify_NilSafe(t *testing.T) {
 	var cfg *DocClassConfig
 	if got := cfg.Classify("anything", ""); got != "" {
 		t.Errorf("nil config must return empty, got %q", got)
+	}
+}
+
+func TestClassify_RegulatoryWinsOverResearch(t *testing.T) {
+	// Real KB titles that contain both regulation keywords AND research /
+	// strategy keywords. The regulatory class is listed before research /
+	// strategy in fixture order, so first-match-wins picks regulatory.
+	cfg := fixtureDocClassConfig()
+	cases := []struct {
+		title string
+	}{
+		{"Robustel 解决方案与 EPDK 能源行业网络安全能力模型的深度合规性分析.md"},
+		{"土耳其能源行业网络安全法规深度分析与Robustel竞争战略研究报告.md"},
+		{"海事网络安全.md"},
+		{"IEC 62443 工业网络安全标准对标分析.md"},
+		{"GDPR 合规要求与产品支持矩阵.md"},
+	}
+	for _, c := range cases {
+		got := cfg.Classify(c.title, "")
+		if got != "regulatory" {
+			t.Errorf("title=%q: expected regulatory, got %q", c.title, got)
+		}
+	}
+}
+
+func TestClassify_RegulatoryDoesNotEatPlainResearch(t *testing.T) {
+	// Sanity: research titles without regulation keywords still classify
+	// as research, not regulatory.
+	cfg := fixtureDocClassConfig()
+	cases := []struct {
+		title, want string
+	}{
+		{"2025年全球边缘计算与物联网融合深度战略研究报告.md", "research"},
+		{"工业蜂窝路由器市场：赋能下一波数字化转型浪潮.md", ""}, // no specific keyword
+		{"破局之路：连接与计算时代的销售转型战略路线图.md", "strategy"},
+	}
+	for _, c := range cases {
+		got := cfg.Classify(c.title, "")
+		if got != c.want {
+			t.Errorf("title=%q: got %q, want %q", c.title, got, c.want)
+		}
 	}
 }
 
