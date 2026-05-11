@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -14,11 +15,12 @@ import (
 // PluginIntoChatMessage handles the transformation of search results into chat messages
 type PluginIntoChatMessage struct {
 	messageService interfaces.MessageService
+	config         *config.Config
 }
 
 // NewPluginIntoChatMessage creates and registers a new PluginIntoChatMessage instance
-func NewPluginIntoChatMessage(eventManager *EventManager, messageService interfaces.MessageService) *PluginIntoChatMessage {
-	res := &PluginIntoChatMessage{messageService: messageService}
+func NewPluginIntoChatMessage(eventManager *EventManager, messageService interfaces.MessageService, cfg *config.Config) *PluginIntoChatMessage {
+	res := &PluginIntoChatMessage{messageService: messageService, config: cfg}
 	eventManager.Register(res)
 	return res
 }
@@ -115,6 +117,19 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 			"has_template":     chatManage.SummaryConfig.ContextTemplate != "",
 		})
 		return next()
+	}
+
+	// Direction B: tag KB chunks whose entity family mismatches the query anchor.
+	// This stampsMetadata["entity_mismatch"]="true" and Metadata["entity_owner"]="X"
+	// on mismatched chunks BEFORE we render them into XML, so buildContextAttributes
+	// can surface the signal to the LLM.
+	if p.config != nil && p.config.EntityAliases != nil {
+		tagEntityMismatches(ctx,
+			chatManage.Query,
+			chatManage.RewriteQuery,
+			p.config.EntityAliases,
+			chatManage.MergeResult,
+		)
 	}
 
 	var contextsBuilder strings.Builder
@@ -365,15 +380,31 @@ func buildContextAttributes(r *types.SearchResult) string {
 		}
 		return ` source_type="web_search"`
 	}
-	// Knowledge base result
+
+	// Knowledge base result — base attributes.
 	docName := r.KnowledgeTitle
 	if docName == "" {
 		docName = r.KnowledgeFilename
 	}
+	var base string
 	if docName != "" {
-		return fmt.Sprintf(` source_type="knowledge_base" source_doc="%s"`, escapeXMLAttr(docName))
+		base = fmt.Sprintf(` source_type="knowledge_base" source_doc="%s"`, escapeXMLAttr(docName))
+	} else {
+		base = ` source_type="knowledge_base"`
 	}
-	return ` source_type="knowledge_base"`
+
+	// Append entity-mismatch signal when the tagger has flagged this chunk.
+	// The LLM sees entity_owner="Milesight" entity_mismatch="true" and can apply
+	// the Generation Task Guard (Rule 7) to avoid silently copying competitor specs.
+	if r.Metadata != nil && r.Metadata["entity_mismatch"] == "true" {
+		owner := r.Metadata["entity_owner"]
+		if owner != "" {
+			base += fmt.Sprintf(` entity_owner="%s" entity_mismatch="true"`, escapeXMLAttr(owner))
+		} else {
+			base += ` entity_mismatch="true"`
+		}
+	}
+	return base
 }
 
 // escapeXMLAttr escapes characters that must not appear raw inside an XML attribute value.

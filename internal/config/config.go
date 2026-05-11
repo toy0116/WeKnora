@@ -808,6 +808,34 @@ func (c *EntityAliasConfig) Build() {
 	}
 }
 
+// DetectGroups scans text for known alias forms and returns a map of
+// group-index → canonical name (first form in the group) for every alias group
+// whose forms appear in text. Used by the entity-mismatch tagger to identify
+// which "entity family" a query or a retrieved chunk belongs to.
+//
+// Only groups with at least one form found as a case-insensitive substring are
+// included. Groups with a single form are included too (useful for single-language
+// entity names that still need mismatch detection).
+func (c *EntityAliasConfig) DetectGroups(text string) map[int]string {
+	if c == nil || len(c.Groups) == 0 {
+		return nil
+	}
+	lower := strings.ToLower(text)
+	found := make(map[int]string)
+	for gi, g := range c.Groups {
+		if len(g.Forms) == 0 {
+			continue
+		}
+		for _, f := range g.Forms {
+			if strings.Contains(lower, strings.ToLower(f)) {
+				found[gi] = g.Forms[0] // canonical = first form in YAML
+				break
+			}
+		}
+	}
+	return found
+}
+
 // Expand returns all alias forms found in text that are not already present,
 // deduplicating against seen (lowercase keys). It scans for each known term
 // as a case-insensitive substring, so multi-word forms like "Schneider Electric"

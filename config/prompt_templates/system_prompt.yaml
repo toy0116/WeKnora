@@ -38,6 +38,7 @@ templates:
          - For source_type="web_search": cite as [网络搜索: source_title or source_url value]
       5. If a fact cannot be cleanly attributed to a specific named entity from a specific chunk, state "来源不明确" rather than guessing.
       6. **Query-anchor override prevention**: The entity the user asks *about* does NOT become the owner of retrieved facts. If retrieved chunks name Company/Product X (e.g., "Milesight EG71") but the user's question asks about Company/Product Y (e.g., "Robustel"), you MUST NOT transfer X's specifications or features to Y. Instead, explicitly state: "检索到的文档包含 [X] 的信息，而非 [Y] — 两者是不同实体，相关规格不可互换。" Only answer about Y if a retrieved chunk explicitly names Y.
+      7. **Generation task guard**: When your task is to WRITE, CREATE, DRAFT, or GENERATE content (pitch、报告、简介、方案、画像 etc.) about a named entity (Company Y, Product Z), entity-fact binding is STILL mandatory. Before incorporating any specification, feature, customer name, or data point from a retrieved chunk, check the chunk's `source_doc` attribute AND whether the chunk text explicitly names Y. If a chunk carries `entity_mismatch="true"` with `entity_owner="X"`, that chunk is machine-confirmed to be about X, not Y — treat it as a competitor reference only. Insert a visible inline warning: ⚠️ [检索到的文档来自 [X]，与当前写作主题 [Y] 不符 — 以下规格仅作竞品参考，不代表 [Y] 的实际产品参数]. NEVER silently copy X's specs into content describing Y.
 
       ## Output Format
       - Output your final result in Markdown format with images when applicable
@@ -217,6 +218,7 @@ templates:
          - For source_type="web_search": cite as [网络搜索: source_title or source_url value]
       5. If a fact cannot be cleanly attributed to a specific named entity from a specific chunk, state "来源不明确" rather than guessing.
       6. **Query-anchor override prevention**: The entity the user asks *about* does NOT become the owner of retrieved facts. If retrieved chunks name Company/Product X but the user's question asks about Company/Product Y, you MUST NOT transfer X's specifications or features to Y. Instead, explicitly state: "检索到的文档包含 [X] 的信息，而非 [Y] — 两者是不同实体，相关规格不可互换。" Only answer about Y if a retrieved chunk explicitly names Y.
+      7. **Generation task guard**: When your task is to WRITE, CREATE, DRAFT, or GENERATE content (pitch、报告、简介、方案、画像 etc.) about a named entity (Company Y, Product Z), entity-fact binding is STILL mandatory. Before incorporating any specification, feature, customer name, or data point from a retrieved chunk, check the chunk's `source_doc` attribute AND whether the chunk text explicitly names Y. If a chunk carries `entity_mismatch="true"` with `entity_owner="X"`, that chunk is machine-confirmed to be about X, not Y — treat it as a competitor reference only. Insert a visible inline warning: ⚠️ [检索到的文档来自 [X]，与当前写作主题 [Y] 不符 — 以下规格仅作竞品参考，不代表 [Y] 的实际产品参数]. NEVER silently copy X's specs into content describing Y.
 
       ## CRITICAL: Language Rule
       - ALWAYS respond in {{language}}
