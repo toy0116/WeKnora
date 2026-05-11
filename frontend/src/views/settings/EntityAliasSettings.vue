@@ -3,11 +3,21 @@
     <div class="section-header">
       <h2>Entity Aliases</h2>
       <p class="section-description">
-        配置中英文实体别名词典与产品归属。
-        <strong>别名</strong>（如"鲁邦通" ↔ "Robustel"）在检索时自动作等价扩展。
-        <strong>产品型号</strong>（如 "EG5120" 归 Robustel、"EG71" 归 Milesight）用于检测
-        "用户claim了品牌 X 但提到了属于品牌 Y 的产品" 这类归属冲突，
-        防止生成式任务把竞品规格当成自家产品输出。产品型号不会进入 BM25 查询扩展。
+        <strong>声明追踪的品牌组</strong> — 系统启动时会自动从 wiki 实体页合并完整产品目录与别名，
+        此页面无需列出所有 SKU。一般只在以下场景才需要操作：
+      </p>
+      <ul class="section-actions">
+        <li><strong>新追踪品牌</strong>：新增组，填写品牌名（如 "Sierra Wireless"）+ 中文别名</li>
+        <li><strong>停止追踪</strong>：删除整个组</li>
+        <li><strong>归属修复</strong>：当 wiki 自动归属错误时，在此手工增删 override</li>
+      </ul>
+      <p class="section-description-sub">
+        <strong>别名</strong>（"鲁邦通" ↔ "Robustel"）参与检索的查询扩展。
+        <strong>产品型号</strong>用于检测 "claim 品牌 X 但提到属于品牌 Y 的产品" 这类归属冲突，
+        防止生成式任务把竞品规格当自家产品输出。<u>产品型号不会进入 BM25 查询扩展。</u>
+      </p>
+      <p class="section-description-note">
+        此处保存的内容写入 <code>entity_aliases.yaml</code>。wiki 自动合并的产品（运行时 180+ Robustel SKU、150+ Milesight SKU）<strong>不会出现在此 UI</strong>，但参与所有 retrieval 与归属冲突检测。
       </p>
     </div>
 
@@ -294,8 +304,47 @@ async function save() {
     .section-description {
       font-size: 13px;
       color: var(--td-text-color-secondary);
-      margin: 0;
+      margin: 0 0 8px;
       line-height: 1.6;
+    }
+
+    .section-actions {
+      font-size: 13px;
+      color: var(--td-text-color-secondary);
+      margin: 4px 0 12px;
+      padding-left: 22px;
+      line-height: 1.7;
+
+      li { margin: 2px 0; }
+      strong { color: var(--td-text-color-primary); }
+    }
+
+    .section-description-sub {
+      font-size: 12px;
+      color: var(--td-text-color-secondary);
+      margin: 4px 0 8px;
+      line-height: 1.6;
+    }
+
+    .section-description-note {
+      font-size: 12px;
+      color: var(--td-text-color-placeholder);
+      background: var(--td-bg-color-secondarycontainer);
+      border-left: 3px solid var(--td-brand-color-light);
+      padding: 8px 12px;
+      margin: 4px 0 0;
+      line-height: 1.6;
+      border-radius: 0 4px 4px 0;
+
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        background: var(--td-bg-color-component);
+        padding: 1px 5px;
+        border-radius: 3px;
+      }
+
+      strong { color: var(--td-text-color-primary); }
     }
   }
 
