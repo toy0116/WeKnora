@@ -31,6 +31,7 @@ type Config struct {
 	IM              *IMConfig              `yaml:"im"               json:"im"`
 	Agent           *AgentConfig           `yaml:"agent"            json:"agent"`
 	EntityAliases   *EntityAliasConfig     `yaml:"-"                json:"entity_aliases,omitempty"`
+	AliasDenylist   *AliasDenylistConfig   `yaml:"-"                json:"alias_denylist,omitempty"`
 	DocClasses      *DocClassConfig        `yaml:"-"                json:"doc_classes,omitempty"`
 	// ConfigDir is the directory that contains config.yaml; set at load time.
 	// Used by handlers that need to read/write sibling config files at runtime.
@@ -422,6 +423,15 @@ func LoadConfig() (*Config, error) {
 		fmt.Printf("Warning: failed to load doc classes: %v\n", err)
 	} else if classes != nil {
 		cfg.DocClasses = classes
+	}
+
+	// Load alias-denylist from entity_alias_denylist.yaml (optional).
+	// Empty file or absent file = no denylist; auto-discovery will not
+	// filter any candidate slugs.
+	if dl, err := loadAliasDenylist(configDir); err != nil {
+		fmt.Printf("Warning: failed to load alias denylist: %v\n", err)
+	} else if dl != nil {
+		cfg.AliasDenylist = dl
 	}
 
 	// Load built-in agent definitions (i18n-aware) from builtin_agents.yaml
@@ -858,6 +868,23 @@ type EntityAliasGroup struct {
 	Forms    []string `yaml:"forms"`
 	Products []string `yaml:"products,omitempty"`
 	Kind     string   `yaml:"kind,omitempty"`
+
+	// Source identifies how this group entered the runtime view. Values:
+	//   - "" or "yaml"   — declared in entity_aliases.yaml (UI-editable,
+	//                      persisted on save).
+	//   - "wiki-auto"    — auto-discovered from wiki entity pages by the
+	//                      inDegree heuristic. Runtime-only; never written
+	//                      to yaml. Surfaced read-only in the Web UI with
+	//                      an "ignore" button that appends WikiSlug to the
+	//                      denylist.
+	// Not yaml-serialised — runtime-only metadata.
+	Source string `yaml:"-" json:"source,omitempty"`
+
+	// WikiSlug is the originating wiki entity slug for Source="wiki-auto"
+	// groups, e.g. "entity/sierra-wireless". Used by the Web UI's ignore
+	// action to identify which slug to add to entity_alias_denylist.yaml.
+	// Empty for yaml-declared groups.
+	WikiSlug string `yaml:"-" json:"wiki_slug,omitempty"`
 }
 
 // IsBrand reports whether the group represents a company/vendor (the only

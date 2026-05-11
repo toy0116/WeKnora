@@ -164,13 +164,86 @@
         <span v-if="savedOk" class="save-ok">✓ 已保存</span>
         <span v-if="saveError" class="save-err">{{ saveError }}</span>
       </div>
+
+      <!-- ─── Wiki Auto-Discovered Section (read-only) ─── -->
+      <div class="auto-discovered-section">
+        <div class="auto-header">
+          <h3>Wiki 自动发现的品牌组</h3>
+          <span class="auto-count">{{ autoDiscovered.length }} 个候选品牌</span>
+        </div>
+        <p class="auto-description">
+          系统根据 wiki 实体页的产品-品牌 outLinks 自动识别（阈值 ≥ 3 个产品指向）。
+          这些组<strong>只在内存中参与 retrieval / 归属冲突检测</strong>，不写入 yaml。
+          觉得不该被识别为竞品的（例如云平台、SoC 厂、上游软件），点 ❌ 加入忽略列表，下次永不出现。
+        </p>
+
+        <div v-if="autoDiscovered.length === 0" class="auto-empty">
+          目前没有自动发现的新品牌候选。
+        </div>
+
+        <div v-else class="auto-groups-list">
+          <div
+            v-for="(group, gi) in autoDiscovered"
+            :key="group.wiki_slug"
+            class="auto-group"
+          >
+            <div class="auto-group-header">
+              <span class="auto-brand-name">{{ group.forms[0] }}</span>
+              <span class="auto-slug">{{ group.wiki_slug }}</span>
+              <t-button
+                theme="danger"
+                variant="text"
+                size="small"
+                :loading="ignoringSlug === group.wiki_slug"
+                @click="ignoreAuto(group.wiki_slug)"
+              >
+                <template #icon><t-icon name="close" /></template>
+                忽略
+              </t-button>
+            </div>
+            <div class="auto-forms">
+              <span class="auto-label">别名：</span>
+              <t-tag
+                v-for="(form, fi) in group.forms"
+                :key="`auto-form-${gi}-${fi}`"
+                theme="primary"
+                variant="outline"
+                class="auto-tag"
+              >
+                {{ form }}
+              </t-tag>
+            </div>
+            <div v-if="(group.products || []).length > 0" class="auto-products">
+              <span class="auto-label">产品（{{ group.products!.length }}）：</span>
+              <t-tag
+                v-for="(product, pi) in (group.products || []).slice(0, 12)"
+                :key="`auto-product-${gi}-${pi}`"
+                theme="warning"
+                variant="outline"
+                class="auto-tag product-tag"
+              >
+                {{ product }}
+              </t-tag>
+              <span v-if="(group.products || []).length > 12" class="auto-more">
+                +{{ (group.products || []).length - 12 }} 个
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { getEntityAliases, updateEntityAliases, type EntityAliasGroup } from '@/api/entity-aliases'
+import {
+  getEntityAliases,
+  updateEntityAliases,
+  ignoreAutoDiscovered,
+  type EntityAliasGroup,
+  type AutoDiscoveredGroup,
+} from '@/api/entity-aliases'
 
 // ---- state ----
 const loading = ref(true)
@@ -179,6 +252,9 @@ const savedOk = ref(false)
 const saveError = ref('')
 
 const groups = ref<EntityAliasGroup[]>([])
+// Wiki auto-discovered candidate brands — read-only, ignorable.
+const autoDiscovered = ref<AutoDiscoveredGroup[]>([])
+const ignoringSlug = ref<string>('')
 
 // inline add-form state
 const addingFormGroupIndex = ref<number | null>(null)
@@ -189,7 +265,7 @@ const addingProductGroupIndex = ref<number | null>(null)
 const newProductValue = ref('')
 
 // ---- lifecycle ----
-onMounted(async () => {
+async function reload() {
   try {
     const res: any = await getEntityAliases()
     const data = res?.data ?? res
@@ -201,12 +277,22 @@ onMounted(async () => {
       forms: [...(g.forms ?? [])],
       products: [...(g.products ?? [])],
     }))
+    // Wiki auto-discovered groups (read-only display).
+    autoDiscovered.value = (data?.auto_discovered ?? []).map((g: any) => ({
+      forms: [...(g.forms ?? [])],
+      products: [...(g.products ?? [])],
+      kind: g.kind ?? '',
+      source: g.source ?? 'wiki-auto',
+      wiki_slug: g.wiki_slug ?? '',
+    }))
   } catch (e: unknown) {
     saveError.value = e instanceof Error ? e.message : String(e)
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(() => { reload() })
 
 // ---- form editing ----
 function startAddForm(gi: number) {
@@ -270,6 +356,22 @@ function addGroup() {
 
 function removeGroup(gi: number) {
   groups.value.splice(gi, 1)
+}
+
+// ---- auto-discovered actions ----
+async function ignoreAuto(slug: string) {
+  if (!slug || ignoringSlug.value) return
+  ignoringSlug.value = slug
+  try {
+    await ignoreAutoDiscovered(slug)
+    // Refresh the auto-discovered list — the just-ignored slug will be
+    // gone since the backend re-runs Build with the new denylist.
+    await reload()
+  } catch (e: unknown) {
+    saveError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    ignoringSlug.value = ''
+  }
 }
 
 // ---- save ----
@@ -469,6 +571,114 @@ async function save() {
   .save-err {
     font-size: 13px;
     color: var(--td-error-color);
+  }
+
+  // ---- wiki auto-discovered section ----
+  .auto-discovered-section {
+    margin-top: 36px;
+    padding-top: 28px;
+    border-top: 1px dashed var(--td-component-stroke);
+  }
+
+  .auto-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 8px;
+
+    h3 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--td-text-color-primary);
+      margin: 0;
+    }
+  }
+
+  .auto-count {
+    font-size: 12px;
+    color: var(--td-text-color-placeholder);
+  }
+
+  .auto-description {
+    font-size: 12px;
+    color: var(--td-text-color-secondary);
+    margin: 0 0 16px;
+    line-height: 1.6;
+
+    strong { color: var(--td-text-color-primary); }
+  }
+
+  .auto-empty {
+    font-size: 13px;
+    color: var(--td-text-color-placeholder);
+    padding: 20px;
+    text-align: center;
+    border: 1px dashed var(--td-component-stroke);
+    border-radius: 8px;
+  }
+
+  .auto-groups-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .auto-group {
+    border: 1px solid var(--td-component-stroke);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--td-bg-color-secondarycontainer);
+    opacity: 0.92;
+  }
+
+  .auto-group-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .auto-brand-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--td-text-color-primary);
+  }
+
+  .auto-slug {
+    flex: 1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--td-text-color-placeholder);
+  }
+
+  .auto-forms,
+  .auto-products {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-top: 4px;
+  }
+
+  .auto-label {
+    font-size: 12px;
+    color: var(--td-text-color-secondary);
+    margin-right: 4px;
+  }
+
+  .auto-tag {
+    font-size: 12px;
+
+    &.product-tag {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: 0.02em;
+    }
+  }
+
+  .auto-more {
+    font-size: 11px;
+    color: var(--td-text-color-placeholder);
+    font-style: italic;
   }
 }
 </style>

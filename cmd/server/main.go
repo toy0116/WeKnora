@@ -151,16 +151,26 @@ func main() {
 					logger.Warnf(ctx, "entity-alias: wiki listing failed: %v", err)
 					return
 				}
+				// Phase 1: augment yaml-declared brand groups with wiki
+				// aliases + products (档2).
 				formsAdded, productsAdded := cfg.EntityAliases.MergeFromWiki(allEntityPages)
+				// Phase 2: auto-discover wiki entities that look like brands
+				// (inDegree heuristic) and aren't yet declared in yaml. The
+				// denylist (config/entity_alias_denylist.yaml) suppresses
+				// false positives that the Web UI user has explicitly
+				// ignored.
+				autoAdded := cfg.EntityAliases.AutoDiscoverFromWiki(
+					allEntityPages, cfg.AliasDenylist, 0, // 0 → default threshold
+				)
 				logger.Infof(ctx,
-					"entity-alias: merged %d wiki entity pages — forms+%d products+%d",
-					len(allEntityPages), formsAdded, productsAdded,
+					"entity-alias: merged %d wiki entity pages — yaml-forms+%d yaml-products+%d auto-groups+%d",
+					len(allEntityPages), formsAdded, productsAdded, autoAdded,
 				)
 			}
 			// Trigger initial merge — yaml has already been loaded via
 			// config.Load() and Build was called there without the closure
 			// installed, so we re-run Build now to populate runtimeGroups
-			// with wiki augmentation.
+			// with wiki augmentation + auto-discovered brands.
 			cfg.EntityAliases.Build()
 		}
 

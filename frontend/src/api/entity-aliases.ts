@@ -1,4 +1,4 @@
-import { get, put } from '@/utils/request'
+import { get, post, put } from '@/utils/request'
 
 /**
  * One alias group in the entity dictionary.
@@ -19,10 +19,22 @@ import { get, put } from '@/utils/request'
 export interface EntityAliasGroup {
   forms: string[]
   products?: string[]
+  kind?: string
+}
+
+/** Wiki-auto-discovered brand group (read-only, ignorable). */
+export interface AutoDiscoveredGroup extends EntityAliasGroup {
+  source: 'wiki-auto'
+  wiki_slug: string
 }
 
 export interface EntityAliasConfig {
   groups: EntityAliasGroup[]
+}
+
+export interface EntityAliasesPayload {
+  groups: EntityAliasGroup[]
+  auto_discovered: AutoDiscoveredGroup[]
 }
 
 export function getEntityAliases() {
@@ -31,4 +43,14 @@ export function getEntityAliases() {
 
 export function updateEntityAliases(config: EntityAliasConfig) {
   return put('/api/v1/system/entity-aliases', config)
+}
+
+/**
+ * Append a wiki entity slug to the auto-discovery denylist.
+ * After this call returns, the corresponding wiki-auto group will not
+ * appear in subsequent GET responses and will not participate in any
+ * runtime retrieval checks.
+ */
+export function ignoreAutoDiscovered(slug: string) {
+  return post('/api/v1/system/entity-aliases/ignore', { slug })
 }

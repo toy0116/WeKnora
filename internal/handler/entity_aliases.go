@@ -46,14 +46,66 @@ type entityAliasPayload struct {
 	Groups []entityAliasGroup `json:"groups" yaml:"groups"`
 }
 
-// GetEntityAliases returns the current alias groups.
+// GetEntityAliases returns the current alias groups split into two views:
+//   - groups          — yaml-declared, UI-editable.
+//   - auto_discovered — wiki auto-discovered brand candidates (read-only,
+//                       ignorable via /ignore).
 // GET /api/v1/system/entity-aliases
 func (h *EntityAliasHandler) GetEntityAliases(c *gin.Context) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	groups := h.currentGroups()
-	c.JSON(http.StatusOK, gin.H{"ok": 1, "data": gin.H{"groups": groups}})
+	autoDiscovered := h.currentAutoDiscovered()
+	c.JSON(http.StatusOK, gin.H{
+		"ok": 1,
+		"data": gin.H{
+			"groups":          groups,
+			"auto_discovered": autoDiscovered,
+		},
+	})
+}
+
+// IgnoreAutoDiscoveredRequest carries the wiki slug the user clicked
+// "ignore" on in the Web UI. After persisting to the denylist yaml the
+// handler re-runs Build so the corresponding wiki-auto group disappears
+// from runtimeGroups immediately.
+type IgnoreAutoDiscoveredRequest struct {
+	Slug string `json:"slug" binding:"required"`
+}
+
+// IgnoreAutoDiscovered appends a wiki entity slug to the auto-discovery
+// denylist and re-applies the alias config so the group vanishes.
+// POST /api/v1/system/entity-aliases/ignore
+func (h *EntityAliasHandler) IgnoreAutoDiscovered(c *gin.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var req IgnoreAutoDiscoveredRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": 0, "error": err.Error()})
+		return
+	}
+	if h.cfg.AliasDenylist == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok": 0, "error": "alias denylist not configured on server",
+		})
+		return
+	}
+	if err := h.cfg.AliasDenylist.Append(req.Slug); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": 0, "error": err.Error()})
+		return
+	}
+	// Rebuild so the wiki-auto group vanishes from runtimeGroups. Build
+	// calls RuntimeRefresh which re-runs AutoDiscoverFromWiki — and the
+	// new denylist entry now filters this slug out.
+	if h.cfg.EntityAliases != nil {
+		h.cfg.EntityAliases.Build()
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":   1,
+		"data": gin.H{"ignored_slug": req.Slug},
+	})
 }
 
 // UpdateEntityAliases replaces all alias groups, persists to disk, and
@@ -110,9 +162,8 @@ func (h *EntityAliasHandler) UpdateEntityAliases(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": 1, "data": gin.H{"groups": payload.Groups}})
 }
 
-// currentGroups returns the groups from in-memory config (already loaded at startup).
-// Both Forms AND Products are surfaced so the Web UI can edit them round-trip
-// without dropping data on save.
+// currentGroups returns the YAML-declared groups (UI-editable surface).
+// Wiki-auto-discovered groups are returned separately by currentAutoDiscovered.
 func (h *EntityAliasHandler) currentGroups() []entityAliasGroup {
 	if h.cfg.EntityAliases == nil {
 		return []entityAliasGroup{}
@@ -123,6 +174,41 @@ func (h *EntityAliasHandler) currentGroups() []entityAliasGroup {
 			Forms:    g.Forms,
 			Products: g.Products,
 			Kind:     g.Kind,
+		})
+	}
+	return out
+}
+
+// autoDiscoveredGroup is the read-only payload shape for wiki-auto groups.
+// The Source + WikiSlug fields are required so the UI can render the ❌
+// Ignore button and route the click back to the slug for persistence.
+type autoDiscoveredGroup struct {
+	Forms    []string `json:"forms"`
+	Products []string `json:"products,omitempty"`
+	Kind     string   `json:"kind,omitempty"`
+	Source   string   `json:"source"`    // always "wiki-auto" in this slice
+	WikiSlug string   `json:"wiki_slug"` // originating wiki slug, e.g. "entity/teltonika"
+}
+
+// currentAutoDiscovered returns the subset of runtimeGroups marked
+// Source="wiki-auto" — i.e. brand candidates that came from the
+// inDegree heuristic, not from yaml.
+func (h *EntityAliasHandler) currentAutoDiscovered() []autoDiscoveredGroup {
+	if h.cfg.EntityAliases == nil {
+		return []autoDiscoveredGroup{}
+	}
+	rt := h.cfg.EntityAliases.RuntimeGroups()
+	out := make([]autoDiscoveredGroup, 0)
+	for _, g := range rt {
+		if g.Source != "wiki-auto" {
+			continue
+		}
+		out = append(out, autoDiscoveredGroup{
+			Forms:    g.Forms,
+			Products: g.Products,
+			Kind:     g.Kind,
+			Source:   g.Source,
+			WikiSlug: g.WikiSlug,
 		})
 	}
 	return out

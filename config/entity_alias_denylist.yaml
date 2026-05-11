@@ -1,0 +1,12 @@
+# Auto-discovered wiki entity slugs that must NEVER be promoted to a
+# wiki-auto brand group, regardless of how many product pages point at them.
+#
+# When to add an entry: a wiki entity shows up in the Web UI's "Wiki 自动
+# 发现的品牌组" section but isn't actually a competitor / brand you want
+# tracked (e.g. cloud platforms you integrate with, generic SoC vendors,
+# software your products run on top of). Click the ❌ button in the Web UI
+# to append automatically, or edit this file by hand.
+#
+# This file is hot-rebuilt on every EntityAlias save and on every server
+# restart, so newly-added entries take effect immediately.
+ignored_slugs: []

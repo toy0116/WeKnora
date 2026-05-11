@@ -493,6 +493,10 @@ func RegisterEntityAliasRoutes(r *gin.RouterGroup, h *handler.EntityAliasHandler
 	{
 		aliases.GET("", h.GetEntityAliases)
 		aliases.PUT("", h.UpdateEntityAliases)
+		// Wiki auto-discovery ignore: append a wiki slug to the denylist
+		// so the corresponding auto-discovered group disappears from
+		// runtime and never recurs.
+		aliases.POST("/ignore", h.IgnoreAutoDiscovered)
 	}
 }
 
