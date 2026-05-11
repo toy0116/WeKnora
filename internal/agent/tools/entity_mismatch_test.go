@@ -102,6 +102,32 @@ func TestBuildEntityWarningBlock_NilAliasesSafe(t *testing.T) {
 	}
 }
 
+func TestTagChunkMismatchAttrs_TechOnlyChunkProducesNoOwner(t *testing.T) {
+	// Regression: a Robustel chunk that doesn't mention any registered brand
+	// or product in its first 300 bytes but DOES mention "Building Automation"
+	// (a technology group with kind=technology) must NOT be tagged with
+	// entity_owner="楼宇自动化" entity_mismatch="true". The technology group
+	// is not a brand — chunks owning only technology mentions provide no
+	// evidence of cross-brand attribution.
+	cfg := &config.EntityAliasConfig{
+		Groups: []config.EntityAliasGroup{
+			{Forms: []string{"Robustel", "鲁邦通"}, Products: []string{"R1520LG"}},
+			{Forms: []string{"Milesight"}, Products: []string{"EG71"}},
+			{Forms: []string{"楼宇自动化", "Building Automation", "BAS", "BMS"}, Kind: "technology"},
+		},
+	}
+	cfg.Build()
+	scan := chunkScanSnippet(
+		"some-internal-doc.pdf", // no brand/product in title
+		"",
+		"This chunk discusses Building Automation Systems (BAS) generally, including BMS integration patterns and IoT considerations.",
+	)
+	got := TagChunkMismatchAttrs("Robustel LoRaWAN Edge Gateway specs", scan, cfg)
+	if got != "" {
+		t.Errorf("tech-only chunk must not be flagged, got %q", got)
+	}
+}
+
 func TestChunkScanSnippet_RespectsBudget(t *testing.T) {
 	// Long content must be truncated so deep-buried coincidental brand
 	// mentions don't trigger false-positive mismatches.

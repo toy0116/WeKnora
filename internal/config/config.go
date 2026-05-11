@@ -795,12 +795,38 @@ type EntityAliasConfig struct {
 // and attribution-conflict warnings, answering the question:
 // "when the user mentions model number M, which brand owns M?"
 //
+// Kind classifies the group for mismatch-detection scope:
+//   - "" or "brand" (default) — a company/vendor that owns products. Eligible
+//     to be a brand anchor for entity-mismatch detection.
+//   - "technology" — a protocol or technology concept (LoRaWAN, BACnet, IoT,
+//     LoRa…). Useful for query expansion but MUST NOT serve as a brand
+//     anchor: a query mentioning "LoRa" is not claiming any specific brand,
+//     and chunks about Robustel products that happen to discuss LoRa should
+//     not be flagged as cross-brand mismatches. This was the false-positive
+//     mode that originally tagged Robustel datasheets with entity_owner=
+//     "鲁邦通" entity_mismatch="true" when the query contained "LoRa".
+//   - "concept" — synonym of "technology"; reserved for future granularity.
+//
 // This split is the core fix for hallucinated product attribution: when a
 // query says "Brand X's Product Y" but Y is registered under Brand Z, the
 // pipeline can detect the conflict before retrieval and warn the LLM.
 type EntityAliasGroup struct {
 	Forms    []string `yaml:"forms"`
 	Products []string `yaml:"products,omitempty"`
+	Kind     string   `yaml:"kind,omitempty"`
+}
+
+// IsBrand reports whether the group represents a company/vendor (the only
+// kind eligible to serve as a brand anchor for entity-mismatch detection).
+// Empty Kind defaults to brand for backward compatibility with the pre-Kind
+// yaml format.
+func (g EntityAliasGroup) IsBrand() bool {
+	switch g.Kind {
+	case "", "brand":
+		return true
+	default:
+		return false
+	}
 }
 
 // Build pre-computes the lowercase lookup index used by Expand for query
@@ -832,17 +858,30 @@ func (c *EntityAliasConfig) Build() {
 // retrieved-chunk content, where any mention of a brand name or a known
 // product number reveals the chunk's entity family.
 //
-// For QUERY-side anchoring use DetectFormGroups (strict, forms-only) — see
+// Technology / concept groups are intentionally included here: a chunk that
+// mentions "LoRa" still belongs to a technology group, which can be useful
+// for downstream non-mismatch consumers. The mismatch tagger compares chunk
+// groups against the anchor (which is brand-only), so technology overlap
+// between query and chunk does not produce false positives.
+//
+// For QUERY-side anchoring use DetectFormGroups (strict, brand-only) — see
 // that method's doc for why the two are different.
 func (c *EntityAliasConfig) DetectGroups(text string) map[int]string {
-	return c.detectGroups(text, true /* includeProducts */)
+	return c.detectGroups(text, true /* includeProducts */, false /* brandOnly */)
 }
 
 // DetectFormGroups scans text for known alias FORMS only (no products) and
-// returns matched groups. Use this for query-side anchoring where mentioning
-// "EG71" should NOT count as an explicit brand claim — the user might be
-// asking which brand owns the product. Only explicit form mentions (e.g.
-// "Robustel", "鲁邦通") count as anchors.
+// returns matched BRAND groups (groups whose Kind is brand). Use this for
+// query-side anchoring where mentioning "EG71" should NOT count as an
+// explicit brand claim — the user might be asking which brand owns the
+// product. Only explicit brand form mentions (e.g. "Robustel", "鲁邦通")
+// count as anchors.
+//
+// Technology / concept groups (Kind="technology") are deliberately excluded:
+// a query mentioning "LoRa" is not claiming any brand, so it must not anchor
+// the mismatch check. Without this filter, any Robustel datasheet that says
+// "LoRa" would falsely tag as off-topic for a brandless "LoRa" query — a
+// real false positive observed in production.
 //
 // Example: query "Robustel EG71 specs" → DetectFormGroups returns only the
 // Robustel group (anchor = Robustel). DetectGroups would also return Milesight
@@ -850,10 +889,10 @@ func (c *EntityAliasConfig) DetectGroups(text string) map[int]string {
 // algorithm then compares anchor (Robustel) against chunk content (Milesight
 // via product detection) and correctly flags the mismatch.
 func (c *EntityAliasConfig) DetectFormGroups(text string) map[int]string {
-	return c.detectGroups(text, false /* includeProducts */)
+	return c.detectGroups(text, false /* includeProducts */, true /* brandOnly */)
 }
 
-func (c *EntityAliasConfig) detectGroups(text string, includeProducts bool) map[int]string {
+func (c *EntityAliasConfig) detectGroups(text string, includeProducts, brandOnly bool) map[int]string {
 	if c == nil || len(c.Groups) == 0 {
 		return nil
 	}
@@ -861,6 +900,9 @@ func (c *EntityAliasConfig) detectGroups(text string, includeProducts bool) map[
 	found := make(map[int]string)
 	for gi, g := range c.Groups {
 		if len(g.Forms) == 0 && len(g.Products) == 0 {
+			continue
+		}
+		if brandOnly && !g.IsBrand() {
 			continue
 		}
 		canonical := ""
@@ -913,15 +955,20 @@ type AttributionConflict struct {
 }
 
 // DetectAttributionConflicts returns all attribution conflicts found in text.
+// Only BRAND groups participate — a technology mention like "LoRa" is not a
+// brand claim and therefore cannot conflict with any product attribution.
 func (c *EntityAliasConfig) DetectAttributionConflicts(text string) []AttributionConflict {
 	if c == nil || len(c.Groups) == 0 {
 		return nil
 	}
 	lower := strings.ToLower(text)
 
-	// Find which groups have a Form mentioned (claimed brand context).
+	// Find which BRAND groups have a Form mentioned (claimed brand context).
 	claimedBrands := make(map[int]string) // groupIdx → canonical name
 	for gi, g := range c.Groups {
+		if !g.IsBrand() {
+			continue
+		}
 		for _, f := range g.Forms {
 			if f != "" && strings.Contains(lower, strings.ToLower(f)) {
 				claimedBrands[gi] = g.Forms[0]
@@ -935,6 +982,9 @@ func (c *EntityAliasConfig) DetectAttributionConflicts(text string) []Attributio
 
 	var conflicts []AttributionConflict
 	for gi, g := range c.Groups {
+		if !g.IsBrand() {
+			continue
+		}
 		if len(g.Forms) == 0 {
 			continue
 		}

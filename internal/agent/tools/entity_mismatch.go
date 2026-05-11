@@ -52,26 +52,40 @@ func TagChunkMismatchAttrs(query string, scanText string, aliases *config.Entity
 	if aliases == nil {
 		return ""
 	}
-	// Query side: forms only. A product mention in the query (e.g. "EG71")
-	// is NOT treated as a brand anchor — the user might be asking who owns
-	// the product. Only an explicit brand name counts as an anchor.
+	// Query side: brand forms only. A product mention in the query (e.g.
+	// "EG71") is NOT treated as a brand anchor — the user might be asking
+	// who owns the product. Tech forms (LoRaWAN, BAS, IoT) are excluded
+	// inside DetectFormGroups via the Kind=technology filter.
 	anchorGroups := aliases.DetectFormGroups(query)
 	if len(anchorGroups) == 0 {
 		return ""
 	}
-	// Chunk side: forms + products. Any signal of which brand the chunk
-	// belongs to is fair game.
-	chunkGroups := aliases.DetectGroups(scanText)
-	if len(chunkGroups) == 0 {
+	// Chunk side: detect any group (forms + products + tech), then filter
+	// to BRAND groups only. A chunk that only mentions "LoRa" or "BMS" is
+	// not evidence of brand attribution — claiming it owns a chunk is the
+	// second false-positive mode we hit (entity_owner="楼宇自动化", which
+	// isn't a brand at all).
+	raw := aliases.DetectGroups(scanText)
+	if len(raw) == 0 {
 		return ""
 	}
-	// Intersect by group index — if any group overlaps, on-topic.
+	chunkGroups := make(map[int]string, len(raw))
+	for gi, name := range raw {
+		if gi >= 0 && gi < len(aliases.Groups) && aliases.Groups[gi].IsBrand() {
+			chunkGroups[gi] = name
+		}
+	}
+	if len(chunkGroups) == 0 {
+		return "" // chunk has no brand signal — can't claim mismatch
+	}
+	// Intersect by group index — if any brand group overlaps, on-topic.
 	for gi := range anchorGroups {
 		if _, ok := chunkGroups[gi]; ok {
 			return ""
 		}
 	}
-	// No intersection → mismatch. Pick any owner from the chunk groups.
+	// No intersection → mismatch. Pick any owner from the chunk groups
+	// (all of which are brand groups thanks to the filter above).
 	var owner string
 	for _, name := range chunkGroups {
 		owner = name

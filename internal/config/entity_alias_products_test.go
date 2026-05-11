@@ -167,6 +167,63 @@ func TestDetectAttributionConflicts_MultipleConflicts(t *testing.T) {
 	}
 }
 
+func TestDetectFormGroups_TechnologyGroupsExcluded(t *testing.T) {
+	// Regression test: a query mentioning a technology form (e.g. "LoRa")
+	// must NOT count as a brand anchor — that would make any chunk discussing
+	// LoRa look "off-topic" for a different group and trigger a spurious
+	// entity_mismatch on the brand's own datasheet.
+	cfg := &EntityAliasConfig{
+		Groups: []EntityAliasGroup{
+			{Forms: []string{"Robustel", "鲁邦通"}, Products: []string{"R1520LG"}},
+			{Forms: []string{"LoRaWAN", "LoRa"}, Kind: "technology"},
+		},
+	}
+	cfg.Build()
+
+	// Query that mentions only the technology form.
+	got := cfg.DetectFormGroups("LG5100|R3000.*LG|EG.*LoRa")
+	if len(got) != 0 {
+		t.Fatalf("DetectFormGroups must skip technology groups, got %v", got)
+	}
+
+	// DetectGroups (the generous variant used for chunk scanning) STILL sees
+	// technology groups — that's fine for downstream non-mismatch consumers.
+	got = cfg.DetectGroups("LoRa technology overview")
+	if _, ok := got[1]; !ok {
+		t.Errorf("DetectGroups should still see technology mentions: got %v", got)
+	}
+
+	// Sanity: a real brand form still anchors correctly.
+	got = cfg.DetectFormGroups("Robustel LG5100 LoRa")
+	if _, ok := got[0]; !ok {
+		t.Errorf("Robustel brand form must still anchor, got %v", got)
+	}
+	if _, ok := got[1]; ok {
+		t.Errorf("LoRa technology must NOT anchor even when present, got %v", got)
+	}
+}
+
+func TestDetectAttributionConflicts_TechnologyClaimIsNotABrandClaim(t *testing.T) {
+	// "LoRa Robustel EG71" — LoRa is a technology, Robustel is a brand,
+	// EG71 is Milesight's product. Only the Robustel↔EG71 conflict should
+	// be flagged, NOT a "LoRa claimed but EG71 is Milesight" conflict.
+	cfg := &EntityAliasConfig{
+		Groups: []EntityAliasGroup{
+			{Forms: []string{"Robustel", "鲁邦通"}, Products: []string{"EG5120"}},
+			{Forms: []string{"Milesight"}, Products: []string{"EG71"}},
+			{Forms: []string{"LoRaWAN", "LoRa"}, Kind: "technology"},
+		},
+	}
+	cfg.Build()
+	conflicts := cfg.DetectAttributionConflicts("LoRa Robustel EG71 pitch")
+	if len(conflicts) != 1 {
+		t.Fatalf("expected exactly 1 conflict (Robustel→EG71→Milesight), got %d: %+v", len(conflicts), conflicts)
+	}
+	if conflicts[0].ClaimedOwner != "Robustel" || conflicts[0].ActualOwner != "Milesight" {
+		t.Errorf("unexpected conflict: %+v", conflicts[0])
+	}
+}
+
 func TestExpand_DoesNotMixProductsIntoQuery(t *testing.T) {
 	// Critical safety check: query expansion must NOT inject product model
 	// numbers into BM25 queries (would corrupt retrieval). Only Form↔Form

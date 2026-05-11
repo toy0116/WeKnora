@@ -36,6 +36,10 @@ type entityAliasGroup struct {
 	// internal/config/config.go EntityAliasGroup docstring for the full
 	// rationale. omitempty so groups without products serialize cleanly.
 	Products []string `json:"products,omitempty" yaml:"products,omitempty"`
+	// Kind — classifies the group as "brand" (default) or "technology". Only
+	// brand groups serve as anchors for entity-mismatch detection. omitempty
+	// so brand groups (the common case) stay unchanged in yaml.
+	Kind string `json:"kind,omitempty" yaml:"kind,omitempty"`
 }
 
 type entityAliasPayload struct {
@@ -85,7 +89,11 @@ func (h *EntityAliasHandler) UpdateEntityAliases(c *gin.Context) {
 			}
 		}
 		if len(forms) >= 1 || len(products) >= 1 {
-			clean = append(clean, entityAliasGroup{Forms: forms, Products: products})
+			clean = append(clean, entityAliasGroup{
+				Forms:    forms,
+				Products: products,
+				Kind:     g.Kind,
+			})
 		}
 	}
 	payload.Groups = clean
@@ -114,6 +122,7 @@ func (h *EntityAliasHandler) currentGroups() []entityAliasGroup {
 		out = append(out, entityAliasGroup{
 			Forms:    g.Forms,
 			Products: g.Products,
+			Kind:     g.Kind,
 		})
 	}
 	return out
@@ -176,6 +185,7 @@ func (h *EntityAliasHandler) reload(payload entityAliasPayload) {
 		groups = append(groups, config.EntityAliasGroup{
 			Forms:    g.Forms,
 			Products: g.Products,
+			Kind:     g.Kind,
 		})
 	}
 	newCfg := &config.EntityAliasConfig{Groups: groups}

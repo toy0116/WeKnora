@@ -30,9 +30,12 @@ groups:
     products:
       # 5G/4G industrial edge gateways
       - "EG5120"
-      # LTE/LoRaWAN routers
+      # LTE/LoRaWAN routers (R-series)
       - "R1511LG"
       - "R1520LG"
+      - "R3000 LG"
+      # LoRaWAN industrial gateways (LG-series)
+      - "LG5100"
       # Cloud management platform
       - "RCMS"
 
@@ -56,10 +59,23 @@ groups:
   - forms: ["中兴", "ZTE"]
 
   # ── Technologies / protocols ─────────────────────────────────────────────
-  - forms: ["LoRaWAN", "LoRa WAN", "LoRa"]
-  - forms: ["物联网", "IoT", "Internet of Things"]
-  - forms: ["工业互联网", "工业物联网", "IIoT", "Industrial IoT"]
-  - forms: ["边缘计算", "Edge Computing", "边缘网关", "Edge Gateway"]
-  - forms: ["楼宇自动化", "楼控", "Building Automation", "BAS", "BMS"]
-  - forms: ["能源管理", "能耗管理", "Energy Management", "EMS"]
-  - forms: ["预测性维护", "预测维护", "Predictive Maintenance", "PdM"]
+  # These are NOT brands and MUST NOT serve as anchors for entity-mismatch
+  # detection: a query mentioning "LoRa" is not claiming any vendor, so a
+  # Robustel datasheet that says "LoRa" should not be flagged as off-topic.
+  # kind: technology makes DetectFormGroups skip these groups when looking
+  # for a brand anchor, while still using their Forms for cross-lingual
+  # query expansion via Expand().
+  - kind: technology
+    forms: ["LoRaWAN", "LoRa WAN", "LoRa"]
+  - kind: technology
+    forms: ["物联网", "IoT", "Internet of Things"]
+  - kind: technology
+    forms: ["工业互联网", "工业物联网", "IIoT", "Industrial IoT"]
+  - kind: technology
+    forms: ["边缘计算", "Edge Computing", "边缘网关", "Edge Gateway"]
+  - kind: technology
+    forms: ["楼宇自动化", "楼控", "Building Automation", "BAS", "BMS"]
+  - kind: technology
+    forms: ["能源管理", "能耗管理", "Energy Management", "EMS"]
+  - kind: technology
+    forms: ["预测性维护", "预测维护", "Predictive Maintenance", "PdM"]

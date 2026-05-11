@@ -72,10 +72,23 @@ func tagEntityMismatches(
 			scanText += " " + r.Content
 		}
 
-		chunkGroups := aliases.DetectGroups(scanText)
-		if len(chunkGroups) == 0 {
+		raw := aliases.DetectGroups(scanText)
+		if len(raw) == 0 {
 			// Chunk doesn't reference any known entity → can't determine mismatch.
 			continue
+		}
+		// Filter chunk-detected groups to BRAND groups only. A chunk that only
+		// mentions a technology form (LoRa, BAS, IoT…) is not evidence of brand
+		// attribution; flagging it would falsely tag the brand's own datasheets
+		// when the chunk happens to discuss the technology.
+		chunkGroups := make(map[int]string, len(raw))
+		for gi, name := range raw {
+			if gi >= 0 && gi < len(aliases.Groups) && aliases.Groups[gi].IsBrand() {
+				chunkGroups[gi] = name
+			}
+		}
+		if len(chunkGroups) == 0 {
+			continue // no brand signal in chunk
 		}
 
 		// Step 3: check intersection.
