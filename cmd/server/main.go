@@ -37,8 +37,50 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/runtime"
 	"github.com/Tencent/WeKnora/internal/tracing"
+	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
+
+// listAllEntityWikiPages enumerates every published wiki page with
+// PageType="entity" across all KBs. Used at startup to feed
+// EntityAliasConfig.MergeFromWiki — see档2 in cmd/server/main.go.
+//
+// Pagination: WikiPageService.ListPages is per-KB; we iterate KBs and
+// page through each. Page size 500 keeps the round-trip count low for
+// the ~7000-page deployments we expect.
+func listAllEntityWikiPages(
+	ctx context.Context,
+	wikiSvc interfaces.WikiPageService,
+	kbs []*types.KnowledgeBase,
+) ([]*types.WikiPage, error) {
+	const pageSize = 500
+	var all []*types.WikiPage
+	for _, kb := range kbs {
+		if kb == nil || kb.ID == "" {
+			continue
+		}
+		for page := 1; ; page++ {
+			resp, err := wikiSvc.ListPages(ctx, &types.WikiPageListRequest{
+				KnowledgeBaseID: kb.ID,
+				PageType:        "entity",
+				Status:          "published",
+				Page:            page,
+				PageSize:        pageSize,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("kb %s: %w", kb.ID, err)
+			}
+			if resp == nil || len(resp.Pages) == 0 {
+				break
+			}
+			all = append(all, resp.Pages...)
+			if len(resp.Pages) < pageSize {
+				break
+			}
+		}
+	}
+	return all, nil
+}
 
 func main() {
 	// Set Gin mode
@@ -58,24 +100,52 @@ func main() {
 		tracer *tracing.Tracer,
 		resourceCleaner interfaces.ResourceCleaner,
 		kbRepo interfaces.KnowledgeBaseRepository,
+		wikiSvc interfaces.WikiPageService,
 	) error {
+		bootstrapCtx := context.Background()
+
 		// Populate doc-class KB defaults: yaml's kb_defaults is keyed by KB
 		// name, but chunk-render code path passes KB UUIDs. Resolve once at
 		// startup so the classifier can look up by ID in O(1). KB
 		// create/rename will need to re-call ResolveKBDefaults; we'll wire
 		// that in the KB handler when the feature settles.
-		if cfg.DocClasses != nil {
-			bootstrapCtx := context.Background()
-			kbs, err := kbRepo.ListKnowledgeBases(bootstrapCtx)
+		var kbs []*types.KnowledgeBase
+		if cfg.DocClasses != nil || cfg.EntityAliases != nil {
+			var err error
+			kbs, err = kbRepo.ListKnowledgeBases(bootstrapCtx)
 			if err != nil {
-				logger.Warnf(bootstrapCtx, "doc-class: failed to list KBs at startup: %v", err)
+				logger.Warnf(bootstrapCtx, "bootstrap: failed to list KBs: %v", err)
+			}
+		}
+		if cfg.DocClasses != nil {
+			summaries := make([]config.KBSummary, 0, len(kbs))
+			for _, kb := range kbs {
+				summaries = append(summaries, config.KBSummary{ID: kb.ID, Name: kb.Name})
+			}
+			cfg.DocClasses.ResolveKBDefaults(summaries)
+			logger.Infof(bootstrapCtx, "doc-class: resolved kb_defaults for %d KBs", len(summaries))
+		}
+
+		// 档2 — augment entity aliases from wiki entity pages.
+		// The yaml declares the brand groups (the surface of "what entities
+		// we track"); wiki entity pages supply the actual aliases and
+		// brand→product relationships. Maintaining the brand→product list
+		// in yaml duplicates what wiki entity edits already encode; this
+		// merge lets the wiki be the source of truth and yaml become a
+		// declaration of which brands matter.
+		if cfg.EntityAliases != nil && wikiSvc != nil && len(kbs) > 0 {
+			allEntityPages, err := listAllEntityWikiPages(bootstrapCtx, wikiSvc, kbs)
+			if err != nil {
+				logger.Warnf(bootstrapCtx, "entity-alias: wiki listing failed: %v", err)
 			} else {
-				summaries := make([]config.KBSummary, 0, len(kbs))
-				for _, kb := range kbs {
-					summaries = append(summaries, config.KBSummary{ID: kb.ID, Name: kb.Name})
-				}
-				cfg.DocClasses.ResolveKBDefaults(summaries)
-				logger.Infof(bootstrapCtx, "doc-class: resolved kb_defaults for %d KBs", len(summaries))
+				formsAdded, productsAdded := cfg.EntityAliases.MergeFromWiki(allEntityPages)
+				// Rebuild the internal lookup index — MergeFromWiki may have
+				// changed which forms are in each group.
+				cfg.EntityAliases.Build()
+				logger.Infof(bootstrapCtx,
+					"entity-alias: merged %d wiki entity pages — forms+%d products+%d",
+					len(allEntityPages), formsAdded, productsAdded,
+				)
 			}
 		}
 
