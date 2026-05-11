@@ -219,8 +219,15 @@ func (t *ListKnowledgeChunksTool) Execute(ctx context.Context, args json.RawMess
 	}
 
 	knowledgeTitle := t.lookupKnowledgeTitle(ctx, knowledgeID)
+	// knowledge was fetched up-front (line ~125) — its KnowledgeBaseID is
+	// what we need to drive KB-default doc-class resolution. If the lookup
+	// failed earlier we'd already have returned, so knowledge is non-nil here.
+	knowledgeBaseID := ""
+	if knowledge != nil {
+		knowledgeBaseID = knowledge.KnowledgeBaseID
+	}
 
-	output := t.buildOutput(knowledgeID, knowledgeTitle, totalChunks, fetched, chunks)
+	output := t.buildOutput(knowledgeID, knowledgeBaseID, knowledgeTitle, totalChunks, fetched, chunks)
 
 	formattedChunks := make([]map[string]interface{}, 0, len(chunks))
 	for idx, c := range chunks {
@@ -297,6 +304,7 @@ func (t *ListKnowledgeChunksTool) lookupKnowledgeTitle(ctx context.Context, know
 // buildOutput builds the output as XML for the list knowledge chunks tool
 func (t *ListKnowledgeChunksTool) buildOutput(
 	knowledgeID string,
+	knowledgeBaseID string,
 	knowledgeTitle string,
 	total int64,
 	fetched int,
@@ -309,8 +317,9 @@ func (t *ListKnowledgeChunksTool) buildOutput(
 		titleAttr = fmt.Sprintf(" title=\"%s\"", knowledgeTitle)
 	}
 	// Surface doc_class on the parent element so the LLM applies Rule 13's
-	// trust hierarchy when reading the full content below.
-	docClassAttr := BuildDocClassAttr(knowledgeTitle, t.docClasses)
+	// trust hierarchy when reading the full content below. knowledgeBaseID
+	// drives KB-default fallback when the title doesn't match any pattern.
+	docClassAttr := BuildDocClassAttr(knowledgeTitle, knowledgeBaseID, t.docClasses)
 	fmt.Fprintf(&b, "<knowledge_chunks knowledge_id=\"%s\"%s%s total=\"%d\" fetched=\"%d\">\n",
 		knowledgeID, titleAttr, docClassAttr, total, fetched)
 

@@ -133,7 +133,8 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 	}
 
 	// Direction C: tag each KB chunk with its source-document doc_class
-	// (product / strategy / competitive / research / training / solution).
+	// (product / strategy / competitive / research / training / solution /
+	// internal). Resolves via title pattern, then KB-default fallback.
 	// Skips web-search chunks since classification keys off knowledge titles.
 	// Sets r.Metadata["doc_class"] so buildContextAttributes can emit it.
 	if p.config != nil && p.config.DocClasses != nil {
@@ -147,7 +148,7 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 			if docName == "" {
 				docName = r.KnowledgeFilename
 			}
-			if cls := p.config.DocClasses.Classify(docName); cls != "" {
+			if cls := p.config.DocClasses.Classify(docName, r.KnowledgeBaseID); cls != "" {
 				r.Metadata = ensureMetadata(r.Metadata)
 				r.Metadata["doc_class"] = cls
 			}

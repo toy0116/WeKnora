@@ -1204,11 +1204,12 @@ func (t *KnowledgeSearchTool) formatOutput(
 			)
 		}
 		// Doc-class attribute — surfaces the source document's narrative role
-		// (product / strategy / competitive / research / training / solution).
+		// (product / strategy / competitive / research / training / solution /
+		// internal). Resolves via title pattern, then KB-default fallback.
 		// LLM applies the trust hierarchy from system-prompt Rule 13.
 		docClassAttr := ""
 		if t.config != nil {
-			docClassAttr = BuildDocClassAttr(result.KnowledgeTitle, t.config.DocClasses)
+			docClassAttr = BuildDocClassAttr(result.KnowledgeTitle, result.KnowledgeBaseID, t.config.DocClasses)
 		}
 		// Combined "after score=…" attribute payload.
 		extraAttrs := mismatchAttrs + docClassAttr

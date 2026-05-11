@@ -133,3 +133,46 @@ classes:
       - "(?i)客户.{0,2}画像|customer.{0,2}profile"
       - "(?i)\\bpitch\\b"
       - "(?i)应用方案|application.{0,2}(brief|proposal)"
+
+  # ── internal: personal notes, meeting summaries, ops journals, drafts ─
+  # Not authoritative for product spec; should never be cited as
+  # company-fact evidence.
+  - name: internal
+    description: "Personal notes, meeting summaries, ops journals, drafts. Not authoritative."
+    title_patterns:
+      - "(?i)会议.{0,2}(纪要|笔记|记录)"
+      - "(?i)meeting.{0,2}(notes?|minutes)"
+      - "(?i)随笔|笔记|journal"
+
+# ─────────────────────────────────────────────────────────────────────────
+# KB-level defaults — applied AFTER title patterns. A document's class is
+# resolved in this priority order:
+#   1. Its title matches a class pattern above → that class wins
+#   2. Its source KB name appears in kb_defaults → the listed class
+#   3. Neither → "" (unclassified, treated cautiously)
+#
+# Why this layer exists:
+#   You've already organized documents into purpose-specific KBs
+#   (Robustel_Datasheet, Robustel_Strategy, …). Re-encoding that signal as
+#   per-document title regexes is duplicate maintenance. The KB name itself
+#   is a strong default; title patterns become per-doc exceptions for stray
+#   files (e.g. a datasheet that ended up in Robustel_Strategy).
+#
+# Maintenance:
+#   When you create a new KB, add one line here. When you rename a KB, this
+#   file needs the new name (KB lookup is by name, not by UUID, so renames
+#   matter). KB deletes are silent — extra entries don't hurt.
+kb_defaults:
+  # Robustel namespace
+  Robustel_Datasheet: product       # vendor datasheets, OS manuals, SDK refs
+  Robustel_Manual:    product       # operation / configuration manuals
+  Robustel_Support:   product       # FAQs and troubleshooting are factual
+  Robustel_Strategy:  strategy      # roadmaps, GTM, sales playbooks
+  Robustel_Inbox:     ""            # explicitly unclassified — raw ingestion
+  # Cross-vendor / industry namespace
+  Marketing_Insight:  research      # competitor + industry — title patterns
+                                    # like "Litmus" / "In-Depth Analysis of"
+                                    # override individual files to competitive
+  # Personal / ops namespace
+  TY_Notes:           internal      # personal notes / journal
+  TY_Meetings:        internal      # meeting summaries

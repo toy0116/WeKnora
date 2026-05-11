@@ -21,15 +21,18 @@ import (
 )
 
 // BuildDocClassAttr returns ` doc_class="<class>"` (leading space included)
-// for a chunk's knowledge title, or "" when the title doesn't classify.
+// for a chunk's knowledge title, or "" when neither the title pattern nor
+// the KB default classifies. Pass kbID so the classifier can honour KB-level
+// defaults configured in doc_classes.yaml's kb_defaults section; pass "" if
+// the caller doesn't know the KB ID (e.g. web-search chunks).
 //
-// The classifier is first-match-wins over the patterns in doc_classes.yaml;
-// see internal/config/doc_class.go for the algorithm.
-func BuildDocClassAttr(title string, classes *config.DocClassConfig) string {
+// The classifier resolves in priority: title pattern → KB default → "".
+// See internal/config/doc_class.go for the full algorithm.
+func BuildDocClassAttr(title, kbID string, classes *config.DocClassConfig) string {
 	if classes == nil {
 		return ""
 	}
-	name := classes.Classify(title)
+	name := classes.Classify(title, kbID)
 	if name == "" {
 		return ""
 	}

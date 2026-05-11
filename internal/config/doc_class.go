@@ -25,9 +25,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DocClassConfig holds the loaded document-class registry.
+// DocClassConfig holds the loaded document-class registry plus the optional
+// KB-name → class default map.
 type DocClassConfig struct {
 	Classes []DocClass `yaml:"classes"`
+	// KBDefaults maps a KB *name* (as it appears in the knowledge_bases
+	// table) to the doc_class every document in that KB should default to,
+	// unless a more specific title pattern wins. yaml-keyed by name because
+	// KB UUIDs are opaque per-tenant and unstable across environments.
+	KBDefaults map[string]string `yaml:"kb_defaults,omitempty"`
+
+	// kbDefaultsByID is the runtime-resolved cache, keyed by KB ID for O(1)
+	// lookup during chunk rendering. Populated by ResolveKBDefaults.
+	kbDefaultsByID map[string]string
+}
+
+// KBSummary is the minimal {ID, Name} pair a KB service needs to feed in for
+// kb-default resolution. We deliberately avoid coupling to internal/types
+// here to keep this config package leaf-level.
+type KBSummary struct {
+	ID   string
+	Name string
 }
 
 // DocClass is one named class with its title-matching patterns.
@@ -58,24 +76,59 @@ func (c *DocClassConfig) Build() {
 	}
 }
 
-// Classify returns the name of the first class whose patterns match the
-// given title. Returns "" (unclassified) when no class matches or when the
-// classifier is nil / empty.
+// Classify returns the class name for a chunk's source document.
 //
-// Title is matched as a whole-string regex search (not anchored) — patterns
-// can use ^/$ explicitly when needed.
-func (c *DocClassConfig) Classify(title string) string {
-	if c == nil || len(c.Classes) == 0 || title == "" {
+// Resolution order (first match wins, stops there):
+//  1. Title matches one of the per-class regex patterns → that class.
+//  2. kbID is known and ResolveKBDefaults has been called → the KB's
+//     default class from yaml's kb_defaults map.
+//  3. Otherwise → "" (unclassified).
+//
+// kbID is optional (may be empty) — passing it lets the classifier honour
+// per-KB defaults; otherwise resolution falls back to title-only.
+func (c *DocClassConfig) Classify(title, kbID string) string {
+	if c == nil {
 		return ""
 	}
-	for _, cls := range c.Classes {
-		for _, re := range cls.compiled {
-			if re.MatchString(title) {
-				return cls.Name
+	// Title-pattern pass (skipped when there are no classes configured).
+	if title != "" && len(c.Classes) > 0 {
+		for _, cls := range c.Classes {
+			for _, re := range cls.compiled {
+				if re.MatchString(title) {
+					return cls.Name
+				}
 			}
 		}
 	}
+	// KB-default fallback works independently of Classes — a deployment can
+	// rely purely on kb_defaults with zero title patterns.
+	if kbID != "" && len(c.kbDefaultsByID) > 0 {
+		return c.kbDefaultsByID[kbID]
+	}
 	return ""
+}
+
+// ResolveKBDefaults rebuilds the runtime kbID→class map from the yaml-loaded
+// kbDefaults (which is keyed by KB name) and the caller-provided id→name
+// list. Safe to call multiple times — callers should re-call after KB create
+// / rename so the map stays in sync with the database.
+//
+// KBs whose name isn't listed in yaml's kb_defaults are silently skipped —
+// they contribute no default class.
+func (c *DocClassConfig) ResolveKBDefaults(kbs []KBSummary) {
+	if c == nil {
+		return
+	}
+	resolved := make(map[string]string, len(kbs))
+	for _, kb := range kbs {
+		if kb.ID == "" {
+			continue
+		}
+		if cls, ok := c.KBDefaults[kb.Name]; ok && cls != "" {
+			resolved[kb.ID] = cls
+		}
+	}
+	c.kbDefaultsByID = resolved
 }
 
 // loadDocClasses reads config/doc_classes.yaml from configDir. Returns nil

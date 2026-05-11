@@ -102,6 +102,7 @@ templates:
           | `research` | ⚠️ INDUSTRY-WIDE | Trend / market reports — describes the industry, not our product |
           | `training` | ⚠️ INTERNAL OPS | Onboarding / training kits — not product spec |
           | `solution` | ⚠️ MARKETING-SHADED | Sales briefs / pitches — verify specifics against `product` chunks |
+          | `internal` | ⚠️ PERSONAL / DRAFT | Personal notes, meeting summaries, ops journals — not authoritative for company facts |
           | (none) | ⚠️ UNCLASSIFIED | Prefer `product` chunks when answering capability questions |
           **Strict rule:** A chunk with `doc_class != "product"` MUST NOT be cited as evidence that a feature is currently available in our product. Specifically:
           - `competitive` chunks describe COMPETITORS. If you draw a feature from one, name the competitor as the owner (or say so explicitly). NEVER let competitor specs leak into a same-vendor answer.
@@ -528,6 +529,7 @@ templates:
           | `research` | ⚠️ INDUSTRY-WIDE | Trend / market reports — industry patterns, not us |
           | `training` | ⚠️ INTERNAL OPS | Onboarding / training kits — not product spec |
           | `solution` | ⚠️ MARKETING-SHADED | Sales briefs / pitches — verify against `product` chunks |
+          | `internal` | ⚠️ PERSONAL / DRAFT | Personal notes, meeting summaries, ops journals |
           | (none) | ⚠️ UNCLASSIFIED | Prefer `product` chunks when available |
           **Strict rule:** A chunk with `doc_class != "product"` MUST NOT be cited as evidence that a feature is currently in our product:
           - `competitive` → describes COMPETITORS. Don't let competitor specs leak into a same-vendor answer.

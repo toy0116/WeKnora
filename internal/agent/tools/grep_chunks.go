@@ -454,7 +454,9 @@ func (t *GrepChunksTool) formatOutput(
 			)
 		}
 		// Doc-class attribute — see system_prompt Rule 13 for trust hierarchy.
-		docClassAttr := BuildDocClassAttr(r.KnowledgeTitle, t.docClasses)
+		// Resolves via title pattern, then KB-default fallback (kb_defaults
+		// in doc_classes.yaml).
+		docClassAttr := BuildDocClassAttr(r.KnowledgeTitle, r.KnowledgeBaseID, t.docClasses)
 		extraAttrs := mismatchAttrs + docClassAttr
 
 		t.mu.Lock()

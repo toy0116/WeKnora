@@ -57,7 +57,28 @@ func main() {
 		router *gin.Engine,
 		tracer *tracing.Tracer,
 		resourceCleaner interfaces.ResourceCleaner,
+		kbRepo interfaces.KnowledgeBaseRepository,
 	) error {
+		// Populate doc-class KB defaults: yaml's kb_defaults is keyed by KB
+		// name, but chunk-render code path passes KB UUIDs. Resolve once at
+		// startup so the classifier can look up by ID in O(1). KB
+		// create/rename will need to re-call ResolveKBDefaults; we'll wire
+		// that in the KB handler when the feature settles.
+		if cfg.DocClasses != nil {
+			bootstrapCtx := context.Background()
+			kbs, err := kbRepo.ListKnowledgeBases(bootstrapCtx)
+			if err != nil {
+				logger.Warnf(bootstrapCtx, "doc-class: failed to list KBs at startup: %v", err)
+			} else {
+				summaries := make([]config.KBSummary, 0, len(kbs))
+				for _, kb := range kbs {
+					summaries = append(summaries, config.KBSummary{ID: kb.ID, Name: kb.Name})
+				}
+				cfg.DocClasses.ResolveKBDefaults(summaries)
+				logger.Infof(bootstrapCtx, "doc-class: resolved kb_defaults for %d KBs", len(summaries))
+			}
+		}
+
 		// Create HTTP server
 		server := &http.Server{
 			Handler: router,
