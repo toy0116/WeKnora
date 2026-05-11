@@ -1,24 +1,51 @@
-# Entity alias dictionary for cross-lingual knowledge base retrieval.
+# Entity alias dictionary for cross-lingual knowledge base retrieval AND
+# product-attribution conflict detection.
 #
-# When a query contains any form (canonical or alias), the search pipeline
-# automatically appends all other forms so both BM25 keyword matching and
-# vector retrieval can find documents regardless of the language used.
+# Two fields per group:
+#   - forms:    cross-lingual / cross-spelling aliases for the SAME entity
+#               (e.g. "鲁邦通" ↔ "Robustel"). Forms expand into BM25/vector
+#               queries so retrieval finds documents regardless of which form
+#               the user typed.
+#   - products: model numbers / SKUs that belong to this entity (e.g. "EG5120"
+#               belongs to Robustel). Products are NOT expanded into queries
+#               (that would corrupt retrieval); they only participate in
+#               entity-detection and attribution-conflict checks.
 #
-# Format:
-#   - forms: [list of equivalent terms — order does not matter]
+# When a query says "Brand X's Product Y" but Y is registered under Brand Z,
+# the pipeline emits an `<entity_warning>` block to the LLM so it can refuse
+# to fabricate specs. See internal/config/config.go EntityAliasGroup doc.
 #
 # Guidelines:
-#   - List the most commonly used form first (aids readability, not logic).
-#   - Include all spelling variants that appear in your documents.
+#   - List the most commonly used form first (it becomes the canonical name).
+#   - Include all spelling variants seen in documents under forms.
+#   - List a model only once; do NOT cross-list the same model under multiple
+#     groups (a product belongs to one brand).
 #   - Keep entries focused: one product / company / concept per group.
-#   - Abbreviations belong in the same group as their expansions.
+#   - For groups that are purely conceptual (protocols, technologies), products
+#     can stay empty — they only matter for branded products.
 
 groups:
   # ── Companies (Robustel ecosystem) ───────────────────────────────────────
   - forms: ["鲁邦通", "Robustel"]
+    products:
+      # 5G/4G industrial edge gateways
+      - "EG5120"
+      # LTE/LoRaWAN routers
+      - "R1511LG"
+      - "R1520LG"
+      # Cloud management platform
+      - "RCMS"
+
   - forms: ["Milesight", "星纵物联", "星纵"]
+    products:
+      # LoRaWAN gateways & building-automation IoT devices
+      - "EG71"
+      - "UG65"
+      - "UG67"
 
   # ── Major vendors (common in customer / partner documents) ───────────────
+  # Add products: [] for these as they appear in real documents. Until then,
+  # form-based detection still works for cross-source contamination guards.
   - forms: ["西门子", "Siemens"]
   - forms: ["施耐德", "施耐德电气", "Schneider Electric", "Schneider"]
   - forms: ["霍尼韦尔", "Honeywell"]

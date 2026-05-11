@@ -39,7 +39,12 @@ func tagEntityMismatches(
 	}
 
 	// Step 1: detect which entity groups the query is anchored to.
-	anchorGroups := aliases.DetectGroups(query + " " + rewriteQuery)
+	// Use DetectFormGroups (strict, forms only) so a product mention in the
+	// query (e.g. "EG71") is NOT treated as a brand anchor — the user might
+	// be asking who owns the product. Only an explicit brand name (e.g.
+	// "Robustel", "鲁邦通") counts as an anchor. This keeps the mismatch
+	// check sensitive to "user named brand X but chunks are about brand Y".
+	anchorGroups := aliases.DetectFormGroups(query + " " + rewriteQuery)
 	if len(anchorGroups) == 0 {
 		// Query doesn't reference any known entity — nothing to compare against.
 		return

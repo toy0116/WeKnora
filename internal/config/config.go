@@ -783,11 +783,29 @@ type EntityAliasConfig struct {
 }
 
 // EntityAliasGroup is one set of equivalent terms in the alias dictionary.
+//
+// Forms are cross-lingual / cross-spelling aliases for the SAME entity (e.g.
+// "鲁邦通" ↔ "Robustel"). They participate in query expansion so BM25/vector
+// retrieval finds documents regardless of which form the user typed.
+//
+// Products are model numbers / SKUs that belong to this entity (e.g. "EG5120"
+// belongs to Robustel). Products are intentionally NOT expanded into queries
+// (we don't want "Robustel" to inject "EG5120, R1511LG, RCMS…" into BM25 —
+// that would corrupt retrieval). Products are used ONLY for entity detection
+// and attribution-conflict warnings, answering the question:
+// "when the user mentions model number M, which brand owns M?"
+//
+// This split is the core fix for hallucinated product attribution: when a
+// query says "Brand X's Product Y" but Y is registered under Brand Z, the
+// pipeline can detect the conflict before retrieval and warn the LLM.
 type EntityAliasGroup struct {
-	Forms []string `yaml:"forms"`
+	Forms    []string `yaml:"forms"`
+	Products []string `yaml:"products,omitempty"`
 }
 
-// Build pre-computes the lowercase lookup index. Call once after loading.
+// Build pre-computes the lowercase lookup index used by Expand for query
+// expansion. Only Forms participate in the index — Products are deliberately
+// excluded to keep retrieval clean (see EntityAliasGroup doc).
 func (c *EntityAliasConfig) Build() {
 	c.index = make(map[string][]string)
 	for _, g := range c.Groups {
@@ -808,32 +826,141 @@ func (c *EntityAliasConfig) Build() {
 	}
 }
 
-// DetectGroups scans text for known alias forms and returns a map of
-// group-index → canonical name (first form in the group) for every alias group
-// whose forms appear in text. Used by the entity-mismatch tagger to identify
-// which "entity family" a query or a retrieved chunk belongs to.
+// DetectGroups scans text for known alias forms OR product names and returns
+// a map of group-index → canonical name for every group whose forms or
+// products appear in text. This is the GENEROUS variant used for scanning
+// retrieved-chunk content, where any mention of a brand name or a known
+// product number reveals the chunk's entity family.
 //
-// Only groups with at least one form found as a case-insensitive substring are
-// included. Groups with a single form are included too (useful for single-language
-// entity names that still need mismatch detection).
+// For QUERY-side anchoring use DetectFormGroups (strict, forms-only) — see
+// that method's doc for why the two are different.
 func (c *EntityAliasConfig) DetectGroups(text string) map[int]string {
+	return c.detectGroups(text, true /* includeProducts */)
+}
+
+// DetectFormGroups scans text for known alias FORMS only (no products) and
+// returns matched groups. Use this for query-side anchoring where mentioning
+// "EG71" should NOT count as an explicit brand claim — the user might be
+// asking which brand owns the product. Only explicit form mentions (e.g.
+// "Robustel", "鲁邦通") count as anchors.
+//
+// Example: query "Robustel EG71 specs" → DetectFormGroups returns only the
+// Robustel group (anchor = Robustel). DetectGroups would also return Milesight
+// (via EG71), conflating user intent with attribution. The chunk-mismatch
+// algorithm then compares anchor (Robustel) against chunk content (Milesight
+// via product detection) and correctly flags the mismatch.
+func (c *EntityAliasConfig) DetectFormGroups(text string) map[int]string {
+	return c.detectGroups(text, false /* includeProducts */)
+}
+
+func (c *EntityAliasConfig) detectGroups(text string, includeProducts bool) map[int]string {
 	if c == nil || len(c.Groups) == 0 {
 		return nil
 	}
 	lower := strings.ToLower(text)
 	found := make(map[int]string)
 	for gi, g := range c.Groups {
-		if len(g.Forms) == 0 {
+		if len(g.Forms) == 0 && len(g.Products) == 0 {
 			continue
 		}
+		canonical := ""
+		if len(g.Forms) > 0 {
+			canonical = g.Forms[0]
+		} else {
+			canonical = g.Products[0]
+		}
+		matched := false
 		for _, f := range g.Forms {
-			if strings.Contains(lower, strings.ToLower(f)) {
-				found[gi] = g.Forms[0] // canonical = first form in YAML
+			if f != "" && strings.Contains(lower, strings.ToLower(f)) {
+				matched = true
+				break
+			}
+		}
+		if !matched && includeProducts {
+			for _, p := range g.Products {
+				if p != "" && strings.Contains(lower, strings.ToLower(p)) {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched {
+			found[gi] = canonical
+		}
+	}
+	return found
+}
+
+// DetectAttributionConflicts scans text for "brand X mentioned alongside
+// product Y" patterns where Y is registered to a DIFFERENT brand Z. Returns
+// a list of conflicts the caller can surface as warnings to the LLM.
+//
+// Example: text="Robustel EG71 pitch" with EG71 registered under Milesight
+// returns one AttributionConflict{ClaimedOwner: "Robustel", Product: "EG71",
+// ActualOwner: "Milesight"}.
+//
+// A conflict requires:
+//  1. text contains a Form of group A (the claimed owner), AND
+//  2. text contains a Product of group B (the actual owner), AND
+//  3. A != B (different groups).
+//
+// Products mentioned without any brand context produce no conflict (no claim
+// to dispute). Brands mentioned without any product produce no conflict.
+type AttributionConflict struct {
+	ClaimedOwner string // canonical brand the user attributed to (first Form of group A)
+	Product      string // product name as it appears in text (matched form)
+	ActualOwner  string // canonical brand the product is registered under (first Form of group B)
+}
+
+// DetectAttributionConflicts returns all attribution conflicts found in text.
+func (c *EntityAliasConfig) DetectAttributionConflicts(text string) []AttributionConflict {
+	if c == nil || len(c.Groups) == 0 {
+		return nil
+	}
+	lower := strings.ToLower(text)
+
+	// Find which groups have a Form mentioned (claimed brand context).
+	claimedBrands := make(map[int]string) // groupIdx → canonical name
+	for gi, g := range c.Groups {
+		for _, f := range g.Forms {
+			if f != "" && strings.Contains(lower, strings.ToLower(f)) {
+				claimedBrands[gi] = g.Forms[0]
 				break
 			}
 		}
 	}
-	return found
+	if len(claimedBrands) == 0 {
+		return nil // No brand claim → no conflict to detect
+	}
+
+	var conflicts []AttributionConflict
+	for gi, g := range c.Groups {
+		if len(g.Forms) == 0 {
+			continue
+		}
+		ownerCanonical := g.Forms[0]
+		for _, p := range g.Products {
+			if p == "" {
+				continue
+			}
+			if !strings.Contains(lower, strings.ToLower(p)) {
+				continue
+			}
+			// Product p (belonging to group gi) is mentioned. For every
+			// CLAIMED brand that is NOT this group, that's a conflict.
+			for claimGi, claimName := range claimedBrands {
+				if claimGi == gi {
+					continue // user named the correct brand
+				}
+				conflicts = append(conflicts, AttributionConflict{
+					ClaimedOwner: claimName,
+					Product:      p,
+					ActualOwner:  ownerCanonical,
+				})
+			}
+		}
+	}
+	return conflicts
 }
 
 // Expand returns all alias forms found in text that are not already present,

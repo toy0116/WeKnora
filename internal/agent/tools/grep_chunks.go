@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -79,17 +80,28 @@ type GrepChunksTool struct {
 	BaseTool
 	db            *gorm.DB
 	searchTargets types.SearchTargets
+	// entityAliases drives the entity-mismatch attribution check on returned
+	// chunks (matches the chat_pipeline.tagEntityMismatches behavior so Agent
+	// mode and classic RAG mode produce consistent warnings). Optional —
+	// when nil, the tool degrades to its pre-fix output shape.
+	entityAliases *config.EntityAliasConfig
 
 	mu          sync.Mutex
 	seenChunks  map[string]bool
 }
 
-// NewGrepChunksTool creates a new grep chunks tool
-func NewGrepChunksTool(db *gorm.DB, searchTargets types.SearchTargets) *GrepChunksTool {
+// NewGrepChunksTool creates a new grep chunks tool.
+// entityAliases may be nil — the tool degrades to its pre-fix output shape.
+func NewGrepChunksTool(
+	db *gorm.DB,
+	searchTargets types.SearchTargets,
+	entityAliases *config.EntityAliasConfig,
+) *GrepChunksTool {
 	return &GrepChunksTool{
 		BaseTool:      grepChunksTool,
 		db:            db,
 		searchTargets: searchTargets,
+		entityAliases: entityAliases,
 		seenChunks:    make(map[string]bool),
 	}
 }
@@ -395,6 +407,16 @@ func (t *GrepChunksTool) formatOutput(
 ) string {
 	var b strings.Builder
 
+	// Entity-attribution warning — prepended BEFORE the grep results so the
+	// LLM sees the brand→product conflict before reading any chunk. Mirrors
+	// the same check applied in knowledge_search; see internal/config/config.go.
+	if t.entityAliases != nil {
+		joined := strings.Join(queries, " ")
+		if warn := BuildEntityWarningBlock(joined, t.entityAliases); warn != "" {
+			b.WriteString(warn)
+		}
+	}
+
 	b.WriteString(fmt.Sprintf("<grep_results chunk_count=\"%d\">\n", len(results)))
 	for _, q := range queries {
 		b.WriteString(fmt.Sprintf("<query>%s</query>\n", xmlEscape(q)))
@@ -405,9 +427,23 @@ func (t *GrepChunksTool) formatOutput(
 		return b.String()
 	}
 
+	joinedQuery := strings.Join(queries, " ")
+
 	for _, r := range results {
 		counts := countRegexHits(r.Content, compiled, queries)
 		snippet := extractSnippetRegex(r.Content, compiled)
+
+		// Per-chunk entity-mismatch tag (entity_owner / entity_mismatch
+		// attributes). Empty when there's no anchor, no chunk-side entity,
+		// or the two intersect.
+		mismatchAttrs := ""
+		if t.entityAliases != nil {
+			mismatchAttrs = TagChunkMismatchAttrs(
+				joinedQuery,
+				chunkScanSnippet(r.KnowledgeTitle, "", r.Content),
+				t.entityAliases,
+			)
+		}
 
 		t.mu.Lock()
 		seen := t.seenChunks[r.ID]
@@ -416,12 +452,13 @@ func (t *GrepChunksTool) formatOutput(
 
 		if seen {
 			b.WriteString(fmt.Sprintf(
-				"<chunk chunk_id=\"%s\" knowledge_id=\"%s\" knowledge_title=\"%s\" chunk_index=\"%d\" score=\"%.3f\" already_seen=\"true\">\n",
+				"<chunk chunk_id=\"%s\" knowledge_id=\"%s\" knowledge_title=\"%s\" chunk_index=\"%d\" score=\"%.3f\" already_seen=\"true\"%s>\n",
 				xmlEscape(r.ID),
 				xmlEscape(r.KnowledgeID),
 				xmlEscape(r.KnowledgeTitle),
 				r.ChunkIndex,
 				r.MatchScore,
+				mismatchAttrs,
 			))
 			for _, q := range queries {
 				if c := counts[q]; c > 0 {
@@ -435,12 +472,13 @@ func (t *GrepChunksTool) formatOutput(
 		}
 
 		b.WriteString(fmt.Sprintf(
-			"<chunk chunk_id=\"%s\" knowledge_id=\"%s\" knowledge_title=\"%s\" chunk_index=\"%d\" score=\"%.3f\">\n",
+			"<chunk chunk_id=\"%s\" knowledge_id=\"%s\" knowledge_title=\"%s\" chunk_index=\"%d\" score=\"%.3f\"%s>\n",
 			xmlEscape(r.ID),
 			xmlEscape(r.KnowledgeID),
 			xmlEscape(r.KnowledgeTitle),
 			r.ChunkIndex,
 			r.MatchScore,
+			mismatchAttrs,
 		))
 		for _, q := range queries {
 			if c := counts[q]; c > 0 {

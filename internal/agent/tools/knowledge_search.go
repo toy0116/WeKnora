@@ -1119,6 +1119,18 @@ func (t *KnowledgeSearchTool) formatOutput(
 	// agents and downstream consumers see a single consistent shape across
 	// all retrieval tools.
 	var ob strings.Builder
+
+	// Entity-attribution warning — prepended BEFORE the search results so the
+	// LLM sees the brand→product conflict before reading any chunk. Fires
+	// when the joined query mentions Brand X together with a product that is
+	// registered to Brand Y (see internal/config/config.go).
+	if t.config != nil && t.config.EntityAliases != nil {
+		joinedQuery := strings.Join(queries, " ")
+		if warn := BuildEntityWarningBlock(joinedQuery, t.config.EntityAliases); warn != "" {
+			ob.WriteString(warn)
+		}
+	}
+
 	ob.WriteString(fmt.Sprintf("<search_results count=\"%d\">\n", len(results)))
 	for _, q := range queries {
 		ob.WriteString(fmt.Sprintf("<query>%s</query>\n", xmlEscape(q)))
@@ -1179,12 +1191,25 @@ func (t *KnowledgeSearchTool) formatOutput(
 		t.seenChunks[result.ID] = true
 		t.seenMu.Unlock()
 
+		// Compute entity-mismatch attrs for this chunk (empty string when off
+		// or when the chunk is on-topic). Scan the per-chunk source_query
+		// rather than the joined queries list, because each chunk was
+		// retrieved by a specific query — that's the anchor we care about.
+		mismatchAttrs := ""
+		if t.config != nil && t.config.EntityAliases != nil {
+			mismatchAttrs = TagChunkMismatchAttrs(
+				result.SourceQuery,
+				chunkScanSnippet(result.KnowledgeTitle, "", result.Content),
+				t.config.EntityAliases,
+			)
+		}
+
 		if seen {
 			// Compact rendering for chunks we already returned in a previous
 			// knowledge_search call during this session. The model has the
 			// content in context already, so re-emitting it only burns tokens.
 			ob.WriteString(fmt.Sprintf(
-				"<chunk rank=\"%d\" chunk_id=\"%s\" chunk_index=\"%d\" knowledge_id=\"%s\" knowledge_base_id=\"%s\" knowledge_title=\"%s\" score=\"%.3f\" source_query=\"%s\" already_seen=\"true\">\n",
+				"<chunk rank=\"%d\" chunk_id=\"%s\" chunk_index=\"%d\" knowledge_id=\"%s\" knowledge_base_id=\"%s\" knowledge_title=\"%s\" score=\"%.3f\" source_query=\"%s\" already_seen=\"true\"%s>\n",
 				i+1,
 				xmlEscape(result.ID),
 				result.ChunkIndex,
@@ -1193,12 +1218,13 @@ func (t *KnowledgeSearchTool) formatOutput(
 				xmlEscape(result.KnowledgeTitle),
 				result.Score,
 				xmlEscape(result.SourceQuery),
+				mismatchAttrs,
 			))
 			ob.WriteString("<note>(content omitted, already returned in a previous knowledge_search call this session)</note>\n")
 			ob.WriteString("</chunk>\n")
 		} else {
 			ob.WriteString(fmt.Sprintf(
-				"<chunk rank=\"%d\" chunk_id=\"%s\" chunk_index=\"%d\" knowledge_id=\"%s\" knowledge_base_id=\"%s\" knowledge_title=\"%s\" score=\"%.3f\" source_query=\"%s\">\n",
+				"<chunk rank=\"%d\" chunk_id=\"%s\" chunk_index=\"%d\" knowledge_id=\"%s\" knowledge_base_id=\"%s\" knowledge_title=\"%s\" score=\"%.3f\" source_query=\"%s\"%s>\n",
 				i+1,
 				xmlEscape(result.ID),
 				result.ChunkIndex,
@@ -1207,6 +1233,7 @@ func (t *KnowledgeSearchTool) formatOutput(
 				xmlEscape(result.KnowledgeTitle),
 				result.Score,
 				xmlEscape(result.SourceQuery),
+				mismatchAttrs,
 			))
 			if snippet := extractSnippetForQueries(result.Content, queries); snippet != "" {
 				ob.WriteString(fmt.Sprintf("<match_snippet>%s</match_snippet>\n", xmlEscape(snippet)))
