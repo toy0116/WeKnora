@@ -756,14 +756,26 @@
                         <p class="desc-hint">{{ $t('agentEditor.llmCallTimeout.hint') }}</p>
                       </div>
                       <div class="setting-control">
-                        <t-input-number 
-                          v-model="formData.config.llm_call_timeout" 
-                          :min="0" 
-                          :max="600" 
+                        <t-input-number
+                          v-model="formData.config.llm_call_timeout"
+                          :min="0"
+                          :max="600"
                           theme="column"
                           :placeholder="$t('agentEditor.llmCallTimeout.placeholder')"
                           clearable
                         />
+                      </div>
+                    </div>
+
+                    <!-- 助手历史压缩（防止过往幻觉污染后续 turn） -->
+                    <div class="setting-row">
+                      <div class="setting-info">
+                        <label>历史压缩（防幻觉续传）</label>
+                        <p class="desc">将每条长助手历史消息替换为结构化 outline：保留用户意图 + 输出格式 + citation，<strong>剥离具体事实声明</strong>。防止过往回答里的幻觉（"EG71 是鲁邦通"等错误归属）在后续 turn 中被自己当作事实重新引用。</p>
+                        <p class="desc-hint">推荐用于长寿命 IM agent（wecom/wechat/dingtalk）—— session 无法轻易重开的场景。短对话或一次性 agent 留 off 即可。每次 turn 启动会增加 ~5-10 秒 outline 抽取时间（带 cache），首次后免费。</p>
+                      </div>
+                      <div class="setting-control">
+                        <t-switch v-model="formData.config.assistant_context_compaction" />
                       </div>
                     </div>
 
@@ -1851,6 +1863,8 @@ const defaultFormData = {
     // 多轮对话设置
     multi_turn_enabled: false,
     history_turns: 5,
+    // 历史压缩（防幻觉续传） — 默认关闭，对长 IM agent 推荐开启
+    assistant_context_compaction: false,
     // 检索策略设置
     embedding_top_k: 10,
     keyword_threshold: 0.3,

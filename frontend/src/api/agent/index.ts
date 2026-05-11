@@ -68,6 +68,10 @@ export interface CustomAgentConfig {
   // ===== 多轮对话设置 =====
   multi_turn_enabled?: boolean;     // 是否启用多轮对话
   history_turns?: number;           // 保留历史轮数
+  // 助手历史压缩：将每条长助手历史消息替换为结构化 outline（保留意图/格式/citation，
+  // 剥离具体事实声明），防止过往幻觉污染后续 turn。建议用于长寿命 IM agent（wecom 等）。
+  // 详见 internal/agent/memory/compactor.go。
+  assistant_context_compaction?: boolean;
 
   // ===== 检索策略设置 =====
   embedding_top_k?: number;         // 向量召回TopK
