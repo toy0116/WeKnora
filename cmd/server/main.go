@@ -133,20 +133,35 @@ func main() {
 		// in yaml duplicates what wiki entity edits already encode; this
 		// merge lets the wiki be the source of truth and yaml become a
 		// declaration of which brands matter.
+		//
+		// Implementation: install a RuntimeRefresh closure on
+		// EntityAliasConfig that the config's Build() invokes after deep-
+		// copying Groups → runtimeGroups. The closure fetches all entity
+		// pages and calls MergeFromWiki, which augments runtimeGroups
+		// (NEVER yaml Groups, so Web-UI saves don't bake wiki entries into
+		// the on-disk yaml).
+		//
+		// The closure is invoked once now at startup and on every
+		// subsequent Build (e.g. when the Web-UI handler saves).
 		if cfg.EntityAliases != nil && wikiSvc != nil && len(kbs) > 0 {
-			allEntityPages, err := listAllEntityWikiPages(bootstrapCtx, wikiSvc, kbs)
-			if err != nil {
-				logger.Warnf(bootstrapCtx, "entity-alias: wiki listing failed: %v", err)
-			} else {
+			cfg.EntityAliases.RuntimeRefresh = func() {
+				ctx := context.Background()
+				allEntityPages, err := listAllEntityWikiPages(ctx, wikiSvc, kbs)
+				if err != nil {
+					logger.Warnf(ctx, "entity-alias: wiki listing failed: %v", err)
+					return
+				}
 				formsAdded, productsAdded := cfg.EntityAliases.MergeFromWiki(allEntityPages)
-				// Rebuild the internal lookup index — MergeFromWiki may have
-				// changed which forms are in each group.
-				cfg.EntityAliases.Build()
-				logger.Infof(bootstrapCtx,
+				logger.Infof(ctx,
 					"entity-alias: merged %d wiki entity pages — forms+%d products+%d",
 					len(allEntityPages), formsAdded, productsAdded,
 				)
 			}
+			// Trigger initial merge — yaml has already been loaded via
+			// config.Load() and Build was called there without the closure
+			// installed, so we re-run Build now to populate runtimeGroups
+			// with wiki augmentation.
+			cfg.EntityAliases.Build()
 		}
 
 		// Create HTTP server

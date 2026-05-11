@@ -779,15 +779,51 @@ type WebSearchConfig struct {
 
 // ── Entity alias dictionary ───────────────────────────────────────────────────
 
-// EntityAliasConfig holds all alias groups loaded from entity_aliases.yaml.
-// Each group is a set of interchangeable terms (e.g. "鲁邦通" ↔ "Robustel").
-// The config is loaded once at startup; the search pipeline uses it to expand
-// queries with cross-lingual equivalents before BM25 + vector retrieval.
+// EntityAliasConfig holds all alias groups loaded from entity_aliases.yaml,
+// plus a separate runtime view that may include wiki-merged additions.
+//
+// Two-tier state model (introduced for档2):
+//
+//   - Groups []EntityAliasGroup
+//     The yaml-on-disk state. Exposed via JSON to the Web UI so the
+//     settings page only shows entries the user maintains by hand.
+//     Mutating this slice via the Web-UI save path is what gets
+//     persisted back to entity_aliases.yaml.
+//
+//   - runtimeGroups []EntityAliasGroup (private)
+//     Groups + wiki-merged additions. This is what the retrieval pipeline
+//     reads via DetectGroups / DetectFormGroups / DetectAttributionConflicts
+//     and what query-expansion uses via the index map. Wiki augmentation
+//     lives here only — never bleeds back to Groups, never gets written
+//     to entity_aliases.yaml.
+//
+// The split fixes a "save amplification" bug that existed before档2 was
+// hardened: the Web UI was showing the merged list (both yaml + 180+
+// wiki-discovered products), and clicking save would bake every wiki
+// entry into yaml, defeating档2's whole point (wiki = source of truth
+// for product catalogs). After this split, save only persists yaml-
+// originating entries; wiki augmentation is reapplied on every Build
+// via RuntimeRefresh.
 type EntityAliasConfig struct {
-	// Groups is the raw list loaded from YAML.
+	// Groups is the raw list loaded from YAML. Treated as immutable by
+	// the retrieval pipeline; only the Web-UI handler mutates it (and
+	// then calls Build to re-apply wiki augmentation on top).
 	Groups []EntityAliasGroup `yaml:"groups"`
-	// index maps every lowercase form to its sibling forms for O(1) lookup.
+
+	// runtimeGroups is Groups + wiki augmentation. Built by Build()
+	// from a deep copy of Groups, then mutated by RuntimeRefresh.
+	runtimeGroups []EntityAliasGroup
+
+	// index maps every lowercase form (from runtimeGroups) to its sibling
+	// forms for O(1) Expand() lookup.
 	index map[string][]string
+
+	// RuntimeRefresh is an optional callback invoked at the end of every
+	// Build to repopulate the wiki-merged augmentation on runtimeGroups.
+	// Set by main.go bootstrap so it has access to wikiSvc + kbRepo.
+	// Nil in tests / when wiki merge isn't wired — Build then leaves
+	// runtimeGroups as a plain copy of Groups.
+	RuntimeRefresh func()
 }
 
 // EntityAliasGroup is one set of equivalent terms in the alias dictionary.
@@ -837,18 +873,41 @@ func (g EntityAliasGroup) IsBrand() bool {
 	}
 }
 
-// Build pre-computes the lowercase lookup index used by Expand for query
-// expansion. Only Forms participate in the index — Products are deliberately
-// excluded to keep retrieval clean (see EntityAliasGroup doc).
+// Build refreshes the runtime view in three steps:
+//  1. Deep-copy Groups → runtimeGroups (resets any prior wiki augmentation).
+//  2. Invoke RuntimeRefresh if set (lets main.go's wiki-merge closure
+//     re-augment runtimeGroups against the current wiki state).
+//  3. Rebuild the form→siblings index from runtimeGroups for Expand().
+//
+// Build is the single entry point that the Web-UI save path uses after
+// mutating Groups, so wiki augmentation is automatically reapplied on
+// every save without bleeding into yaml.
 func (c *EntityAliasConfig) Build() {
+	c.runtimeGroups = make([]EntityAliasGroup, len(c.Groups))
+	for i, g := range c.Groups {
+		c.runtimeGroups[i] = EntityAliasGroup{
+			Forms:    append([]string(nil), g.Forms...),
+			Products: append([]string(nil), g.Products...),
+			Kind:     g.Kind,
+		}
+	}
+	if c.RuntimeRefresh != nil {
+		c.RuntimeRefresh()
+	}
+	c.rebuildIndex()
+}
+
+// rebuildIndex (re)populates the form→siblings lookup map from
+// runtimeGroups. Only Forms participate; Products are deliberately
+// excluded to keep retrieval clean (see EntityAliasGroup doc).
+func (c *EntityAliasConfig) rebuildIndex() {
 	c.index = make(map[string][]string)
-	for _, g := range c.Groups {
+	for _, g := range c.runtimeGroups {
 		if len(g.Forms) < 2 {
 			continue
 		}
 		for _, f := range g.Forms {
 			key := strings.ToLower(f)
-			// siblings = all other forms in the group
 			siblings := make([]string, 0, len(g.Forms)-1)
 			for _, s := range g.Forms {
 				if s != f {
@@ -858,6 +917,19 @@ func (c *EntityAliasConfig) Build() {
 			c.index[key] = siblings
 		}
 	}
+}
+
+// RuntimeGroups exposes the merged (yaml + wiki) view for tests and any
+// downstream caller that needs to inspect the post-augmentation state.
+// Returns a fresh slice — modifying the returned value does not affect
+// the config.
+func (c *EntityAliasConfig) RuntimeGroups() []EntityAliasGroup {
+	if c == nil {
+		return nil
+	}
+	out := make([]EntityAliasGroup, len(c.runtimeGroups))
+	copy(out, c.runtimeGroups)
+	return out
 }
 
 // DetectGroups scans text for known alias forms OR product names and returns
@@ -901,12 +973,12 @@ func (c *EntityAliasConfig) DetectFormGroups(text string) map[int]string {
 }
 
 func (c *EntityAliasConfig) detectGroups(text string, includeProducts, brandOnly bool) map[int]string {
-	if c == nil || len(c.Groups) == 0 {
+	if c == nil || len(c.runtimeGroups) == 0 {
 		return nil
 	}
 	lower := strings.ToLower(text)
 	found := make(map[int]string)
-	for gi, g := range c.Groups {
+	for gi, g := range c.runtimeGroups {
 		if len(g.Forms) == 0 && len(g.Products) == 0 {
 			continue
 		}
@@ -965,15 +1037,18 @@ type AttributionConflict struct {
 // DetectAttributionConflicts returns all attribution conflicts found in text.
 // Only BRAND groups participate — a technology mention like "LoRa" is not a
 // brand claim and therefore cannot conflict with any product attribution.
+//
+// Operates on runtimeGroups so wiki-merged products participate in conflict
+// detection without needing to be persisted to yaml.
 func (c *EntityAliasConfig) DetectAttributionConflicts(text string) []AttributionConflict {
-	if c == nil || len(c.Groups) == 0 {
+	if c == nil || len(c.runtimeGroups) == 0 {
 		return nil
 	}
 	lower := strings.ToLower(text)
 
 	// Find which BRAND groups have a Form mentioned (claimed brand context).
 	claimedBrands := make(map[int]string) // groupIdx → canonical name
-	for gi, g := range c.Groups {
+	for gi, g := range c.runtimeGroups {
 		if !g.IsBrand() {
 			continue
 		}
@@ -989,7 +1064,7 @@ func (c *EntityAliasConfig) DetectAttributionConflicts(text string) []Attributio
 	}
 
 	var conflicts []AttributionConflict
-	for gi, g := range c.Groups {
+	for gi, g := range c.runtimeGroups {
 		if !g.IsBrand() {
 			continue
 		}

@@ -33,31 +33,55 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 )
 
-// MergeFromWiki augments yaml-declared brand groups with aliases + products
-// harvested from wiki entity pages. Pages should already be filtered to
-// PageType="entity" — see main.go bootstrap for the enumeration code.
+// MergeFromWiki augments runtimeGroups (NOT yaml-on-disk Groups) with
+// aliases + products harvested from wiki entity pages. Pages should already
+// be filtered to PageType="entity" — see main.go bootstrap for the
+// enumeration code.
+//
+// The yaml-on-disk Groups slice is left UNTOUCHED. The Web-UI settings
+// page reads Groups for display and writes it on save, so wiki-discovered
+// SKUs never accidentally get persisted into entity_aliases.yaml. The
+// retrieval pipeline reads runtimeGroups via DetectGroups /
+// DetectFormGroups / DetectAttributionConflicts, so it sees the merged
+// view.
 //
 // Returns counts (forms_added, products_added) so callers can log how
 // much the merge contributed. Safe to call multiple times — duplicates
-// against existing entries are skipped.
+// against runtimeGroups entries (which include both yaml + prior wiki
+// additions) are skipped.
 //
-// Algorithm (per yaml group):
-//  1. Build a lower-cased set of the group's existing form strings.
-//  2. Scan wiki pages: any entity page whose Title OR Aliases contains
-//     one of the group's forms is considered "this brand's page".
-//  3. From every matched brand page, collect Title + Aliases as
-//     candidate new forms. Add ones not already in the group.
-//  4. Build the set of matched brand slugs. Scan wiki pages again:
-//     entity pages whose OutLinks intersect this set, AND whose Title
-//     looks like a product SKU, become candidate new products.
-//  5. Dedup against existing products and add.
+// Typically invoked indirectly via c.Build() through the RuntimeRefresh
+// callback that main.go bootstrap installs. Direct callers must
+// initialise runtimeGroups first (call c.Build() once before calling
+// MergeFromWiki).
 //
-// Caller MUST call c.Build() after MergeFromWiki to refresh the
-// internal lookup index used by Expand. Caller responsibility because
-// callers may want to merge from multiple sources before rebuilding.
+// Algorithm (per BRAND group declared in yaml):
+//  1. Find wiki entity pages whose Title OR Aliases matches any of the
+//     group's existing forms (case-insensitive whole-string).
+//     These are the brand's own wiki pages.
+//  2. Harvest those pages' Title + Aliases as candidate new forms.
+//     Dedup against runtimeGroups[gi].Forms; add the rest there.
+//  3. Build the brand-slug set and scan again: entity pages with
+//     OutLinks targeting a brand-slug at position 0–4 AND a SKU-shaped
+//     title AND not on the protocol denylist become product candidates.
+//  4. Dedup against runtimeGroups[gi].Products; add the rest there.
 func (c *EntityAliasConfig) MergeFromWiki(pages []*types.WikiPage) (formsAdded, productsAdded int) {
 	if c == nil || len(c.Groups) == 0 || len(pages) == 0 {
 		return 0, 0
+	}
+	// If Build hasn't been called yet, runtimeGroups is empty — bootstrap
+	// it from Groups so the merge has something to write to. Normal flow
+	// goes through Build → RuntimeRefresh → MergeFromWiki, so runtimeGroups
+	// is already populated; this branch handles direct test callers.
+	if len(c.runtimeGroups) != len(c.Groups) {
+		c.runtimeGroups = make([]EntityAliasGroup, len(c.Groups))
+		for i, g := range c.Groups {
+			c.runtimeGroups[i] = EntityAliasGroup{
+				Forms:    append([]string(nil), g.Forms...),
+				Products: append([]string(nil), g.Products...),
+				Kind:     g.Kind,
+			}
+		}
 	}
 
 	// Index pages by slug for O(1) lookup.
@@ -70,7 +94,8 @@ func (c *EntityAliasConfig) MergeFromWiki(pages []*types.WikiPage) (formsAdded, 
 	}
 
 	for gi := range c.Groups {
-		g := &c.Groups[gi]
+		// Mutating target — the runtime view.
+		g := &c.runtimeGroups[gi]
 		if !g.IsBrand() {
 			// Technology / concept groups don't carry products and the
 			// OutLinks-based discovery doesn't apply.

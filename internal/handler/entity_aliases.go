@@ -176,9 +176,12 @@ const entityAliasYAMLHeader = `# Entity alias dictionary for cross-lingual knowl
 
 `
 
-// reload updates the in-memory EntityAliasConfig from the given payload.
-// Carries both Forms AND Products into the new config so entity-mismatch
-// detection and attribution-conflict checks keep working after a save.
+// reload updates the yaml-on-disk Groups in place and triggers Build, which
+// re-applies any wiki augmentation via RuntimeRefresh. The config instance
+// pointer is preserved so the RuntimeRefresh closure installed by main.go
+// keeps working — replacing h.cfg.EntityAliases wholesale (the previous
+// behaviour) would drop the closure and silently disable wiki augmentation
+// after the first save.
 func (h *EntityAliasHandler) reload(payload entityAliasPayload) {
 	groups := make([]config.EntityAliasGroup, 0, len(payload.Groups))
 	for _, g := range payload.Groups {
@@ -188,7 +191,12 @@ func (h *EntityAliasHandler) reload(payload entityAliasPayload) {
 			Kind:     g.Kind,
 		})
 	}
-	newCfg := &config.EntityAliasConfig{Groups: groups}
-	newCfg.Build()
-	h.cfg.EntityAliases = newCfg
+	if h.cfg.EntityAliases == nil {
+		h.cfg.EntityAliases = &config.EntityAliasConfig{Groups: groups}
+	} else {
+		h.cfg.EntityAliases.Groups = groups
+	}
+	// Build runs RuntimeRefresh internally so wiki-merged forms/products
+	// are reapplied to runtimeGroups before the index is rebuilt.
+	h.cfg.EntityAliases.Build()
 }

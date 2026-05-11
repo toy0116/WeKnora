@@ -41,12 +41,14 @@ func TestMergeFromWiki_AddsAliasesToMatchedBrand(t *testing.T) {
 		t.Errorf("productsAdded = %d, want 0", productsAdded)
 	}
 
-	got := cfg.Groups[0].Forms
+	// After merge, runtimeGroups should reflect additions; yaml Groups
+	// must NOT (asserted by TestMergeFromWiki_DoesNotMutateYAMLGroups).
+	got := cfg.RuntimeGroups()[0].Forms
 	sort.Strings(got)
 	want := []string{"Guangzhou Robustel Ltd", "Robustel", "鲁邦通"}
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Forms after merge = %v, want %v", got, want)
+		t.Errorf("runtime Forms after merge = %v, want %v", got, want)
 	}
 }
 
@@ -75,7 +77,7 @@ func TestMergeFromWiki_AddsProductsViaOutLinks(t *testing.T) {
 		t.Errorf("productsAdded = %d, want >= 3 (LG5100, EG5120P, R1511e)", productsAdded)
 	}
 
-	gotProducts := cfg.Groups[0].Products
+	gotProducts := cfg.RuntimeGroups()[0].Products
 	contains := func(needle string) bool {
 		for _, p := range gotProducts {
 			if p == needle {
@@ -179,7 +181,7 @@ func TestMergeFromWiki_SKURegexFiltersConceptTitles(t *testing.T) {
 	_, productsAdded := cfg.MergeFromWiki(pages)
 	if productsAdded != 1 {
 		t.Errorf("only R1520LG should be a product, got productsAdded=%d products=%v",
-			productsAdded, cfg.Groups[0].Products)
+			productsAdded, cfg.RuntimeGroups()[0].Products)
 	}
 }
 
@@ -206,7 +208,7 @@ func TestMergeFromWiki_RejectsProtocolEntitiesByDenylist(t *testing.T) {
 	_, productsAdded := cfg.MergeFromWiki(pages)
 	if productsAdded != 1 {
 		t.Errorf("only LG5100 should pass the denylist; got productsAdded=%d products=%v",
-			productsAdded, cfg.Groups[0].Products)
+			productsAdded, cfg.RuntimeGroups()[0].Products)
 	}
 }
 
@@ -233,7 +235,121 @@ func TestMergeFromWiki_RejectsBrandLinkBuriedDeepInOutLinks(t *testing.T) {
 	_, productsAdded := cfg.MergeFromWiki(pages)
 	if productsAdded != 1 {
 		t.Errorf("only LG5100 should pass position check; got productsAdded=%d products=%v",
-			productsAdded, cfg.Groups[0].Products)
+			productsAdded, cfg.RuntimeGroups()[0].Products)
+	}
+}
+
+func TestMergeFromWiki_DoesNotMutateYAMLGroups(t *testing.T) {
+	// Core invariant of the yaml/runtime split: MergeFromWiki must NEVER
+	// touch the Groups slice. The Web-UI handler reads Groups for the
+	// settings page and persists it on save; bleeding wiki entries in
+	// would defeat档2's design (wiki = single source of truth for the
+	// auto-discoverable product catalog).
+	cfg := &EntityAliasConfig{
+		Groups: []EntityAliasGroup{
+			{Forms: []string{"Robustel"}, Products: []string{"EG5120"}},
+		},
+	}
+	cfg.Build()
+	// Snapshot the yaml-on-disk slice before merging.
+	yamlForms := append([]string(nil), cfg.Groups[0].Forms...)
+	yamlProducts := append([]string(nil), cfg.Groups[0].Products...)
+
+	pages := []*types.WikiPage{
+		mkPage("entity/robustel", "Robustel", []string{"鲁邦通"}, nil),
+		mkPage("entity/lg5100", "LG5100", nil, []string{"entity/robustel"}),
+		mkPage("entity/r1520lg", "R1520LG", nil, []string{"entity/robustel"}),
+	}
+	formsAdded, productsAdded := cfg.MergeFromWiki(pages)
+	if formsAdded == 0 || productsAdded == 0 {
+		t.Fatalf("expected merge to discover wiki entries, got forms+%d products+%d",
+			formsAdded, productsAdded)
+	}
+
+	// Groups (yaml) untouched.
+	if !reflect.DeepEqual(cfg.Groups[0].Forms, yamlForms) {
+		t.Errorf("Groups[0].Forms mutated! before=%v after=%v",
+			yamlForms, cfg.Groups[0].Forms)
+	}
+	if !reflect.DeepEqual(cfg.Groups[0].Products, yamlProducts) {
+		t.Errorf("Groups[0].Products mutated! before=%v after=%v",
+			yamlProducts, cfg.Groups[0].Products)
+	}
+
+	// runtimeGroups should reflect the merge.
+	rt := cfg.RuntimeGroups()
+	if len(rt[0].Products) <= len(yamlProducts) {
+		t.Errorf("runtimeGroups should have grown, got %v", rt[0].Products)
+	}
+}
+
+func TestBuild_InvokesRuntimeRefresh(t *testing.T) {
+	// Build is the single entry point that the Web-UI save path uses.
+	// It MUST invoke RuntimeRefresh so the just-mutated Groups get re-
+	// augmented from wiki on every save, not just at startup.
+	cfg := &EntityAliasConfig{
+		Groups: []EntityAliasGroup{{Forms: []string{"Robustel"}}},
+	}
+	called := 0
+	cfg.RuntimeRefresh = func() { called++ }
+
+	cfg.Build()
+	if called != 1 {
+		t.Errorf("expected RuntimeRefresh called once during Build, got %d", called)
+	}
+	cfg.Build()
+	if called != 2 {
+		t.Errorf("expected RuntimeRefresh called again on re-Build, got %d", called)
+	}
+}
+
+func TestBuild_RuntimeGroupsResetBeforeRefresh(t *testing.T) {
+	// Each Build must start from a clean copy of Groups before invoking
+	// RuntimeRefresh. Without this, two Builds in a row would double-merge.
+	cfg := &EntityAliasConfig{
+		Groups: []EntityAliasGroup{{Forms: []string{"Robustel"}, Products: []string{"EG5120"}}},
+	}
+	pages := []*types.WikiPage{
+		mkPage("entity/robustel", "Robustel", []string{"鲁邦通"}, nil),
+		mkPage("entity/lg5100", "LG5100", nil, []string{"entity/robustel"}),
+	}
+	cfg.RuntimeRefresh = func() { cfg.MergeFromWiki(pages) }
+
+	cfg.Build()
+	firstRT := cfg.RuntimeGroups()
+	cfg.Build()
+	secondRT := cfg.RuntimeGroups()
+
+	if !reflect.DeepEqual(firstRT[0].Forms, secondRT[0].Forms) {
+		t.Errorf("two Builds produced different Forms (double-merge?):\n  1st=%v\n  2nd=%v",
+			firstRT[0].Forms, secondRT[0].Forms)
+	}
+	if !reflect.DeepEqual(firstRT[0].Products, secondRT[0].Products) {
+		t.Errorf("two Builds produced different Products:\n  1st=%v\n  2nd=%v",
+			firstRT[0].Products, secondRT[0].Products)
+	}
+}
+
+func TestDetectGroups_ReadsRuntimeNotYAML(t *testing.T) {
+	// Retrieval pipeline (DetectGroups / DetectFormGroups) must read
+	// runtimeGroups, so wiki-merged products participate in entity-
+	// mismatch detection even though they're absent from yaml.
+	cfg := &EntityAliasConfig{
+		Groups: []EntityAliasGroup{{Forms: []string{"Robustel"}}}, // no products in yaml
+	}
+	cfg.RuntimeRefresh = func() {
+		cfg.MergeFromWiki([]*types.WikiPage{
+			mkPage("entity/robustel", "Robustel", nil, nil),
+			mkPage("entity/lg5100", "LG5100", nil, []string{"entity/robustel"}),
+		})
+	}
+	cfg.Build()
+
+	// Chunk content "LG5100 datasheet" should be detected as Robustel via
+	// the wiki-merged product, not via yaml.
+	got := cfg.DetectGroups("LG5100 datasheet")
+	if _, ok := got[0]; !ok {
+		t.Errorf("DetectGroups must find Robustel via wiki-merged LG5100, got %v", got)
 	}
 }
 
