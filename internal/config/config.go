@@ -30,6 +30,7 @@ type Config struct {
 	PromptTemplates *PromptTemplatesConfig `yaml:"prompt_templates" json:"prompt_templates"`
 	IM              *IMConfig              `yaml:"im"               json:"im"`
 	Agent           *AgentConfig           `yaml:"agent"            json:"agent"`
+	EntityAliases   *EntityAliasConfig     `yaml:"-"                json:"entity_aliases,omitempty"`
 }
 
 // AgentConfig represents the global agent settings.
@@ -403,6 +404,13 @@ func LoadConfig() (*Config, error) {
 		backfillConversationDefaults(&cfg)
 	}
 
+	// Load entity alias dictionary from entity_aliases.yaml (optional)
+	if aliases, err := loadEntityAliases(configDir); err != nil {
+		fmt.Printf("Warning: failed to load entity aliases: %v\n", err)
+	} else if aliases != nil {
+		cfg.EntityAliases = aliases
+	}
+
 	// Load built-in agent definitions (i18n-aware) from builtin_agents.yaml
 	if err := types.LoadBuiltinAgentsConfig(configDir); err != nil {
 		fmt.Printf("Warning: failed to load builtin agents config: %v\n", err)
@@ -754,4 +762,98 @@ func loadPromptTemplates(configDir string) (*PromptTemplatesConfig, error) {
 // WebSearchConfig represents the web search configuration
 type WebSearchConfig struct {
 	Timeout int `yaml:"timeout" json:"timeout"` // 超时时间（秒）
+}
+
+// ── Entity alias dictionary ───────────────────────────────────────────────────
+
+// EntityAliasConfig holds all alias groups loaded from entity_aliases.yaml.
+// Each group is a set of interchangeable terms (e.g. "鲁邦通" ↔ "Robustel").
+// The config is loaded once at startup; the search pipeline uses it to expand
+// queries with cross-lingual equivalents before BM25 + vector retrieval.
+type EntityAliasConfig struct {
+	// Groups is the raw list loaded from YAML.
+	Groups []EntityAliasGroup `yaml:"groups"`
+	// index maps every lowercase form to its sibling forms for O(1) lookup.
+	index map[string][]string
+}
+
+// EntityAliasGroup is one set of equivalent terms in the alias dictionary.
+type EntityAliasGroup struct {
+	Forms []string `yaml:"forms"`
+}
+
+// Build pre-computes the lowercase lookup index. Call once after loading.
+func (c *EntityAliasConfig) Build() {
+	c.index = make(map[string][]string)
+	for _, g := range c.Groups {
+		if len(g.Forms) < 2 {
+			continue
+		}
+		for _, f := range g.Forms {
+			key := strings.ToLower(f)
+			// siblings = all other forms in the group
+			siblings := make([]string, 0, len(g.Forms)-1)
+			for _, s := range g.Forms {
+				if s != f {
+					siblings = append(siblings, s)
+				}
+			}
+			c.index[key] = siblings
+		}
+	}
+}
+
+// Expand returns all alias forms found in text that are not already present,
+// deduplicating against seen (lowercase keys). It scans for each known term
+// as a case-insensitive substring, so multi-word forms like "Schneider Electric"
+// are matched correctly.
+func (c *EntityAliasConfig) Expand(text string, seen map[string]struct{}) []string {
+	if c == nil || len(c.index) == 0 {
+		return nil
+	}
+	lower := strings.ToLower(text)
+	var additions []string
+	addedKeys := make(map[string]struct{})
+
+	for term, siblings := range c.index {
+		if !strings.Contains(lower, term) {
+			continue
+		}
+		for _, sibling := range siblings {
+			sk := strings.ToLower(sibling)
+			if _, already := seen[sk]; already {
+				continue
+			}
+			if _, already := addedKeys[sk]; already {
+				continue
+			}
+			// Only add if the sibling is not already present in text
+			if strings.Contains(lower, sk) {
+				continue
+			}
+			additions = append(additions, sibling)
+			addedKeys[sk] = struct{}{}
+		}
+	}
+	return additions
+}
+
+// loadEntityAliases reads config/entity_aliases.yaml from configDir.
+// Returns nil (no error) when the file is absent — the feature is opt-in.
+func loadEntityAliases(configDir string) (*EntityAliasConfig, error) {
+	path := filepath.Join(configDir, "entity_aliases.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // file optional
+		}
+		return nil, fmt.Errorf("entity_aliases.yaml: %w", err)
+	}
+	var cfg EntityAliasConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("entity_aliases.yaml parse error: %w", err)
+	}
+	cfg.Build()
+	fmt.Printf("Loaded entity alias dictionary: %d groups\n", len(cfg.Groups))
+	return &cfg, nil
 }

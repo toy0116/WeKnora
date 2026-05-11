@@ -153,9 +153,25 @@ func (p *PluginSearch) expandQueries(ctx context.Context, chatManage *types.Chat
 		addIfNew(cleaned)
 	}
 
-	// Limit to 5 expansions
+	// Limit to 5 rule-based expansions
 	if len(expansions) > 5 {
 		expansions = expansions[:5]
+	}
+
+	// Entity alias expansion: deterministic, dictionary-driven cross-lingual recall.
+	// When the query contains "鲁邦通", this adds a variant that also contains
+	// "Robustel" (and vice-versa), enabling BM25 to find docs in either language.
+	if p.config != nil && p.config.EntityAliases != nil {
+		aliasAdditions := p.config.EntityAliases.Expand(query, seen)
+		if len(aliasAdditions) > 0 {
+			// Build one combined variant: original query + sibling terms appended.
+			// This keeps the query coherent while surfacing all language forms.
+			combined := query + " " + strings.Join(aliasAdditions, " ")
+			addIfNew(combined)
+			pipelineInfo(ctx, "Search", "alias_expansion", map[string]interface{}{
+				"added_terms": aliasAdditions,
+			})
+		}
 	}
 
 	pipelineInfo(ctx, "Search", "local_expansion_result", map[string]interface{}{

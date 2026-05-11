@@ -1,0 +1,38 @@
+# Entity alias dictionary for cross-lingual knowledge base retrieval.
+#
+# When a query contains any form (canonical or alias), the search pipeline
+# automatically appends all other forms so both BM25 keyword matching and
+# vector retrieval can find documents regardless of the language used.
+#
+# Format:
+#   - forms: [list of equivalent terms — order does not matter]
+#
+# Guidelines:
+#   - List the most commonly used form first (aids readability, not logic).
+#   - Include all spelling variants that appear in your documents.
+#   - Keep entries focused: one product / company / concept per group.
+#   - Abbreviations belong in the same group as their expansions.
+
+groups:
+  # ── Companies (Robustel ecosystem) ───────────────────────────────────────
+  - forms: ["鲁邦通", "Robustel"]
+  - forms: ["Milesight", "星纵物联", "星纵"]
+
+  # ── Major vendors (common in customer / partner documents) ───────────────
+  - forms: ["西门子", "Siemens"]
+  - forms: ["施耐德", "施耐德电气", "Schneider Electric", "Schneider"]
+  - forms: ["霍尼韦尔", "Honeywell"]
+  - forms: ["江森自控", "约翰逊控制", "Johnson Controls", "JCI"]
+  - forms: ["博世", "Bosch"]
+  - forms: ["ABB"]
+  - forms: ["华为", "Huawei"]
+  - forms: ["中兴", "ZTE"]
+
+  # ── Technologies / protocols ─────────────────────────────────────────────
+  - forms: ["LoRaWAN", "LoRa WAN", "LoRa"]
+  - forms: ["物联网", "IoT", "Internet of Things"]
+  - forms: ["工业互联网", "工业物联网", "IIoT", "Industrial IoT"]
+  - forms: ["边缘计算", "Edge Computing", "边缘网关", "Edge Gateway"]
+  - forms: ["楼宇自动化", "楼控", "Building Automation", "BAS", "BMS"]
+  - forms: ["能源管理", "能耗管理", "Energy Management", "EMS"]
+  - forms: ["预测性维护", "预测维护", "Predictive Maintenance", "PdM"]
