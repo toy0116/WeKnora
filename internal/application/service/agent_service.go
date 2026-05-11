@@ -529,7 +529,7 @@ func (s *agentService) registerTools(
 			toolToRegister = tools.NewGrepChunksTool(s.db, config.SearchTargets, s.cfg.EntityAliases, s.cfg.DocClasses)
 			logger.Infof(ctx, "Registered grep_chunks tool with searchTargets: %d targets", len(config.SearchTargets))
 		case tools.ToolListKnowledgeChunks:
-			toolToRegister = tools.NewListKnowledgeChunksTool(s.knowledgeService, s.chunkService, config.SearchTargets, s.cfg.DocClasses)
+			toolToRegister = tools.NewListKnowledgeChunksTool(s.knowledgeService, s.chunkService, config.SearchTargets, s.cfg.DocClasses, s.cfg.EntityAliases)
 		case tools.ToolQueryKnowledgeGraph:
 			toolToRegister = tools.NewQueryKnowledgeGraphTool(s.knowledgeBaseService)
 		case tools.ToolGetDocumentInfo:

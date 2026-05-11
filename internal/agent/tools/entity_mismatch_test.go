@@ -128,6 +128,82 @@ func TestTagChunkMismatchAttrs_TechOnlyChunkProducesNoOwner(t *testing.T) {
 	}
 }
 
+func TestTagChunkOwnerAttr_SingleBrandDetected(t *testing.T) {
+	aliases := testAliases()
+	scan := chunkScanSnippet(
+		"Milesight EG71 Datasheet",
+		"eg71-datasheet-en.pdf",
+		"Milesight EG71 is an intelligent and powerful edge IoT gateway...",
+	)
+	got := TagChunkOwnerAttr(scan, aliases)
+	if !strings.Contains(got, `entity_owner="Milesight"`) {
+		t.Errorf("expected entity_owner=Milesight, got %q", got)
+	}
+	// No entity_mismatch attribute — anchor-free variant.
+	if strings.Contains(got, "entity_mismatch") {
+		t.Errorf("entity_mismatch must not appear in anchor-free tag, got %q", got)
+	}
+}
+
+func TestTagChunkOwnerAttr_DetectsViaProductSKU(t *testing.T) {
+	// Chunk that doesn't mention Milesight by name but contains EG71 (a
+	// registered Milesight product). Should still attribute to Milesight.
+	aliases := testAliases()
+	scan := chunkScanSnippet(
+		"EG71 building IoT gateway specs",
+		"",
+		"Receive data on up to 8 LoRaWAN channels, supports BACnet MS/TP, Modbus...",
+	)
+	got := TagChunkOwnerAttr(scan, aliases)
+	if !strings.Contains(got, `entity_owner="Milesight"`) {
+		t.Errorf("expected entity_owner=Milesight via EG71 product, got %q", got)
+	}
+}
+
+func TestTagChunkOwnerAttr_AmbiguousChunkProducesNothing(t *testing.T) {
+	// Comparison chunk mentions BOTH Robustel and Milesight — can't claim
+	// single ownership, must stay silent.
+	aliases := testAliases()
+	scan := chunkScanSnippet(
+		"Robustel vs Milesight comparison",
+		"",
+		"Robustel R1520LG has X, Milesight EG71 has Y, our analysis shows...",
+	)
+	if got := TagChunkOwnerAttr(scan, aliases); got != "" {
+		t.Errorf("ambiguous chunk must produce empty, got %q", got)
+	}
+}
+
+func TestTagChunkOwnerAttr_NoBrandProducesNothing(t *testing.T) {
+	aliases := testAliases()
+	scan := chunkScanSnippet("general LoRaWAN concepts", "", "LoRaWAN is a low-power...")
+	if got := TagChunkOwnerAttr(scan, aliases); got != "" {
+		t.Errorf("no-brand chunk must produce empty, got %q", got)
+	}
+}
+
+func TestTagChunkOwnerAttr_NilAliasesSafe(t *testing.T) {
+	if got := TagChunkOwnerAttr("Milesight EG71 datasheet", nil); got != "" {
+		t.Errorf("nil aliases must be a no-op, got %q", got)
+	}
+}
+
+func TestTagChunkOwnerAttr_TechnologyOnlyChunkProducesNothing(t *testing.T) {
+	// A chunk only mentioning a technology group (LoRaWAN) is not owned by
+	// any brand — owner attribute must not fire.
+	cfg := &config.EntityAliasConfig{
+		Groups: []config.EntityAliasGroup{
+			{Forms: []string{"Robustel"}, Products: []string{"R1520LG"}},
+			{Forms: []string{"LoRaWAN", "LoRa"}, Kind: "technology"},
+		},
+	}
+	cfg.Build()
+	scan := chunkScanSnippet("LoRaWAN gateway concepts", "", "LoRaWAN supports class A, B, C devices...")
+	if got := TagChunkOwnerAttr(scan, cfg); got != "" {
+		t.Errorf("technology-only chunk must produce empty, got %q", got)
+	}
+}
+
 func TestChunkScanSnippet_RespectsBudget(t *testing.T) {
 	// Long content must be truncated so deep-buried coincidental brand
 	// mentions don't trigger false-positive mismatches.

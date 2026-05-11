@@ -137,6 +137,55 @@ func BuildEntityWarningBlock(query string, aliases *config.EntityAliasConfig) st
 	return sb.String()
 }
 
+// TagChunkOwnerAttr is the anchor-free variant of TagChunkMismatchAttrs.
+// It scans chunk content for brand presence and emits ` entity_owner="<X>"`
+// (leading space included) when a single brand is detected. Used by
+// list_knowledge_chunks, which is called by the Agent with a knowledge_id
+// (not a user query), so there's no query anchor available to compute
+// mismatch.
+//
+// The LLM is then expected to compare entity_owner against whichever brand
+// the user is currently asking about (visible from conversation context)
+// and treat brand mismatches as competitor reference per the system prompt
+// Rule 11.
+//
+// Behaviour:
+//   - 0 brand detected in chunk     → "" (no claim, LLM uses content directly)
+//   - 1 brand detected              → ` entity_owner="<canonical>"`
+//   - 2+ brands detected (e.g. a   → "" (ambiguous — comparison chunks
+//     comparison doc)                 legitimately mention multiple brands)
+//
+// Technology / concept groups are excluded — a chunk mentioning "LoRaWAN"
+// isn't owned by any brand.
+func TagChunkOwnerAttr(scanText string, aliases *config.EntityAliasConfig) string {
+	if aliases == nil {
+		return ""
+	}
+	raw := aliases.DetectGroups(scanText)
+	if len(raw) == 0 {
+		return ""
+	}
+	// Filter to brand groups only.
+	brands := make(map[int]string, len(raw))
+	for gi, name := range raw {
+		if gi >= 0 && gi < len(aliases.Groups) && aliases.Groups[gi].IsBrand() {
+			brands[gi] = name
+		}
+	}
+	if len(brands) != 1 {
+		return "" // 0 (no brand) or multi (ambiguous) — don't claim ownership
+	}
+	var owner string
+	for _, name := range brands {
+		owner = name
+		break
+	}
+	if owner == "" {
+		return ""
+	}
+	return fmt.Sprintf(` entity_owner="%s"`, xmlAttrEscape(owner))
+}
+
 // xmlAttrEscape is a minimal XML attribute escaper for the small set of
 // characters that can appear in brand / product names (quotes, angle
 // brackets, ampersands). Names are short and ASCII-ish so we don't need a

@@ -82,6 +82,17 @@ type ListKnowledgeChunksTool struct {
 	// <knowledge_chunks> element so the LLM sees doc_class up-front before
 	// reading any chunk. Optional — nil falls back to silent rendering.
 	docClasses *configpkg.DocClassConfig
+	// entityAliases drives per-chunk entity_owner tagging. Without an anchor
+	// query (this tool is called with a knowledge_id, not a user query), we
+	// can't compute entity_mismatch — but we can still scan the chunk's
+	// content for brand presence and stamp entity_owner. The LLM applies
+	// system-prompt Rule 11 to compare against the brand the user is asking
+	// about and treats mismatches as competitor reference.
+	//
+	// This closes the gap that allowed an Agent to bypass entity-mismatch
+	// detection by going directly to list_knowledge_chunks with a cached
+	// knowledge_id from conversation history.
+	entityAliases *configpkg.EntityAliasConfig
 }
 
 // NewListKnowledgeChunksTool creates a new tool instance.
@@ -90,6 +101,7 @@ func NewListKnowledgeChunksTool(
 	chunkService interfaces.ChunkService,
 	searchTargets types.SearchTargets,
 	docClasses *configpkg.DocClassConfig,
+	entityAliases *configpkg.EntityAliasConfig,
 ) *ListKnowledgeChunksTool {
 	return &ListKnowledgeChunksTool{
 		BaseTool:         listKnowledgeChunksTool,
@@ -97,6 +109,7 @@ func NewListKnowledgeChunksTool(
 		knowledgeService: knowledgeService,
 		searchTargets:    searchTargets,
 		docClasses:       docClasses,
+		entityAliases:    entityAliases,
 	}
 }
 
@@ -329,8 +342,17 @@ func (t *ListKnowledgeChunksTool) buildOutput(
 	}
 
 	for _, c := range chunks {
-		fmt.Fprintf(&b, "<chunk chunk_id=\"%s\" chunk_index=\"%d\" type=\"%s\">\n",
-			c.ID, c.ChunkIndex, c.ChunkType)
+		// Per-chunk entity_owner — scan the chunk content for brand presence
+		// and stamp `entity_owner="<canonical>"` when a single brand is
+		// detected. Helps the LLM identify cases where it's called with a
+		// cached knowledge_id pointing at a competitor's datasheet (the
+		// gap that allowed EG71 to slip back through after history poisoning).
+		ownerAttr := TagChunkOwnerAttr(
+			chunkScanSnippet(knowledgeTitle, "", c.Content),
+			t.entityAliases,
+		)
+		fmt.Fprintf(&b, "<chunk chunk_id=\"%s\" chunk_index=\"%d\" type=\"%s\"%s>\n",
+			c.ID, c.ChunkIndex, c.ChunkType, ownerAttr)
 		fmt.Fprintf(&b, "<content>%s</content>\n", summarizeContent(c.Content))
 
 		if c.ImageInfo != "" {
