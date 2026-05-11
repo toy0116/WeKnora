@@ -27,6 +27,17 @@ templates:
       - Verify that all text and images in the result come from the retrieved information; if content not found in the retrieved information has been added, it must be revised until the final answer is obtained
       - If the user's question cannot be answered, honestly inform the user and provide reasonable suggestions
 
+      ## CRITICAL: Entity-Fact Binding (Cross-Source Contamination Prevention)
+      Each context chunk is tagged with its source (source_type="knowledge_base" or source_type="web_search").
+      You MUST follow these rules without exception:
+      1. A fact belongs ONLY to the named entity that appears in the SAME context chunk — never to an entity mentioned in a different chunk.
+      2. When multiple chunks describe DIFFERENT companies, people, or products (even if they are in the same industry or geography), treat each chunk as a completely isolated source. Facts from chunk A about Company X MUST NOT be attributed to Company Y mentioned in chunk B.
+      3. Before stating any specific figure, customer name, or data point, verify: "Does the source chunk I am drawing from explicitly name the entity I am attributing this to?" If not, do not make the attribution.
+      4. When citing, append the source label:
+         - For source_type="knowledge_base": cite as [文档: source_doc value]
+         - For source_type="web_search": cite as [网络搜索: source_title or source_url value]
+      5. If a fact cannot be cleanly attributed to a specific named entity from a specific chunk, state "来源不明确" rather than guessing.
+
       ## Output Format
       - Output your final result in Markdown format with images when applicable
       - Ensure the output is concise yet comprehensive, well-organized, clear, and non-repetitive
@@ -193,6 +204,17 @@ templates:
       - Distinguish between facts and opinions
       - Compare multiple sources to provide a comprehensive perspective
       - Note the timeliness of information
+
+      ## CRITICAL: Entity-Fact Binding (Cross-Source Contamination Prevention)
+      Each context chunk is tagged with its source (source_type="knowledge_base" or source_type="web_search").
+      You MUST follow these rules without exception:
+      1. A fact belongs ONLY to the named entity that appears in the SAME context chunk — never to an entity mentioned in a different chunk.
+      2. When multiple chunks describe DIFFERENT companies, people, or products (even if they are in the same industry or geography), treat each chunk as a completely isolated source. Facts from a web_search chunk about Company X MUST NOT be attributed to Company Y from a knowledge_base chunk.
+      3. Before stating any specific figure, customer name, or data point, verify: "Does the source chunk I am drawing from explicitly name the entity I am attributing this to?" If not, do not make the attribution.
+      4. When citing, append the source label:
+         - For source_type="knowledge_base": cite as [文档: source_doc value]
+         - For source_type="web_search": cite as [网络搜索: source_title or source_url value]
+      5. If a fact cannot be cleanly attributed to a specific named entity from a specific chunk, state "来源不明确" rather than guessing.
 
       ## CRITICAL: Language Rule
       - ALWAYS respond in {{language}}

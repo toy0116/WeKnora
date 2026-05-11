@@ -135,10 +135,11 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 		contextsBuilder.WriteString("<source type=\"faq\" priority=\"high\">\n")
 		for i, result := range faqResults {
 			passage := getEnrichedPassageForChat(ctx, result)
+			contextAttrs := buildContextAttributes(result)
 			if hasHighConfidenceFAQ && i == 0 {
-				contextsBuilder.WriteString(fmt.Sprintf("<context id=\"FAQ-%d\" match=\"exact\">%s</context>\n", i+1, passage))
+				contextsBuilder.WriteString(fmt.Sprintf("<context id=\"FAQ-%d\" match=\"exact\"%s>%s</context>\n", i+1, contextAttrs, passage))
 			} else {
-				contextsBuilder.WriteString(fmt.Sprintf("<context id=\"FAQ-%d\">%s</context>\n", i+1, passage))
+				contextsBuilder.WriteString(fmt.Sprintf("<context id=\"FAQ-%d\"%s>%s</context>\n", i+1, contextAttrs, passage))
 			}
 		}
 		contextsBuilder.WriteString("</source>\n")
@@ -147,7 +148,8 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 			contextsBuilder.WriteString("<source type=\"document\" priority=\"supplementary\">\n")
 			for i, result := range docResults {
 				passage := getEnrichedPassageForChat(ctx, result)
-				contextsBuilder.WriteString(fmt.Sprintf("<context id=\"DOC-%d\">%s</context>\n", i+1, passage))
+				contextAttrs := buildContextAttributes(result)
+				contextsBuilder.WriteString(fmt.Sprintf("<context id=\"DOC-%d\"%s>%s</context>\n", i+1, contextAttrs, passage))
 			}
 			contextsBuilder.WriteString("</source>")
 		}
@@ -157,7 +159,8 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 			if i > 0 {
 				contextsBuilder.WriteString("\n")
 			}
-			contextsBuilder.WriteString(fmt.Sprintf("<context id=\"%d\">%s</context>", i+1, passage))
+			contextAttrs := buildContextAttributes(result)
+			contextsBuilder.WriteString(fmt.Sprintf("<context id=\"%d\"%s>%s</context>", i+1, contextAttrs, passage))
 		}
 	}
 
@@ -233,57 +236,153 @@ func (p *PluginIntoChatMessage) persistRenderedContent(ctx context.Context, chat
 	}()
 }
 
-// buildDocumentHeader generates a document metadata section listing each unique
-// knowledge document (by KnowledgeID) with its title and description.
-// Returns an empty string when no meaningful metadata is available.
+// buildDocumentHeader generates a source inventory listing each unique document
+// or web search source used in the retrieval results.
+//
+// The header is split into two clearly labelled sections:
+//   - <knowledge_base_documents>: chunks from internal KB files
+//   - <web_search_sources>:       chunks from live web search
+//
+// This gives the LLM an upfront map of ALL sources so it can maintain strict
+// entity-fact binding (e.g., never attribute EBDS facts to Airicom just because
+// both appear in the same context window).
 func buildDocumentHeader(results []*types.SearchResult) string {
-	type docMeta struct {
+	type kbDoc struct {
 		title       string
 		description string
 	}
-
-	seen := make(map[string]struct{})
-	var docs []docMeta
-
-	for _, r := range results {
-		if r.KnowledgeID == "" {
-			continue
-		}
-		if _, ok := seen[r.KnowledgeID]; ok {
-			continue
-		}
-		seen[r.KnowledgeID] = struct{}{}
-
-		title := r.KnowledgeTitle
-		if title == "" {
-			title = r.KnowledgeFilename
-		}
-		if title == "" {
-			continue
-		}
-
-		docs = append(docs, docMeta{
-			title:       title,
-			description: r.KnowledgeDescription,
-		})
+	type webSource struct {
+		title string
+		url   string
 	}
 
-	if len(docs) == 0 {
+	seenKB := make(map[string]struct{})
+	seenWeb := make(map[string]struct{})
+	var kbDocs []kbDoc
+	var webSources []webSource
+
+	for _, r := range results {
+		isWeb := strings.ToLower(r.KnowledgeSource) == "web_search" || r.ChunkType == string(types.ChunkTypeWebSearch)
+
+		if isWeb {
+			// Use URL as dedup key; fall back to KnowledgeID
+			key := ""
+			if r.Metadata != nil {
+				key = r.Metadata["url"]
+			}
+			if key == "" {
+				key = r.KnowledgeID
+			}
+			if key == "" {
+				continue
+			}
+			if _, ok := seenWeb[key]; ok {
+				continue
+			}
+			seenWeb[key] = struct{}{}
+			title := r.KnowledgeTitle
+			if title == "" && r.Metadata != nil {
+				title = r.Metadata["title"]
+			}
+			webSources = append(webSources, webSource{title: title, url: key})
+		} else {
+			if r.KnowledgeID == "" {
+				continue
+			}
+			if _, ok := seenKB[r.KnowledgeID]; ok {
+				continue
+			}
+			seenKB[r.KnowledgeID] = struct{}{}
+			title := r.KnowledgeTitle
+			if title == "" {
+				title = r.KnowledgeFilename
+			}
+			if title == "" {
+				continue
+			}
+			kbDocs = append(kbDocs, kbDoc{title: title, description: r.KnowledgeDescription})
+		}
+	}
+
+	if len(kbDocs) == 0 && len(webSources) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
-	b.WriteString("<documents>\n")
-	for _, d := range docs {
-		b.WriteString("<document>\n")
-		b.WriteString(fmt.Sprintf("<title>%s</title>\n", d.title))
-		if d.description != "" {
-			b.WriteString(fmt.Sprintf("<description>%s</description>\n", d.description))
+	if len(kbDocs) > 0 {
+		b.WriteString("<knowledge_base_documents>\n")
+		for _, d := range kbDocs {
+			b.WriteString("<document>\n")
+			b.WriteString(fmt.Sprintf("<title>%s</title>\n", d.title))
+			if d.description != "" {
+				b.WriteString(fmt.Sprintf("<description>%s</description>\n", d.description))
+			}
+			b.WriteString("</document>\n")
 		}
-		b.WriteString("</document>\n")
+		b.WriteString("</knowledge_base_documents>")
 	}
-	b.WriteString("</documents>")
+	if len(webSources) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("<web_search_sources>\n")
+		for _, s := range webSources {
+			b.WriteString("<source>\n")
+			if s.title != "" {
+				b.WriteString(fmt.Sprintf("<title>%s</title>\n", s.title))
+			}
+			b.WriteString(fmt.Sprintf("<url>%s</url>\n", s.url))
+			b.WriteString("</source>\n")
+		}
+		b.WriteString("</web_search_sources>")
+	}
 	return b.String()
+}
+
+// buildContextAttributes returns an XML attribute string that annotates each
+// context chunk with its source type and identity. This explicit provenance
+// labelling helps the LLM maintain strict entity-fact binding when KB chunks
+// and web search chunks about different entities land in the same context window.
+//
+// Examples:
+//
+//	KB result  → source_type="knowledge_base" source_doc="关于LoRaWAN机遇.md"
+//	Web result → source_type="web_search" source_title="Airicom official site" source_url="https://..."
+func buildContextAttributes(r *types.SearchResult) string {
+	isWeb := strings.ToLower(r.KnowledgeSource) == "web_search" || r.ChunkType == string(types.ChunkTypeWebSearch)
+	if isWeb {
+		url := ""
+		if r.Metadata != nil {
+			url = r.Metadata["url"]
+		}
+		title := r.KnowledgeTitle
+		if title == "" && r.Metadata != nil {
+			title = r.Metadata["title"]
+		}
+		if url != "" {
+			return fmt.Sprintf(` source_type="web_search" source_title="%s" source_url="%s"`,
+				escapeXMLAttr(title), escapeXMLAttr(url))
+		}
+		return ` source_type="web_search"`
+	}
+	// Knowledge base result
+	docName := r.KnowledgeTitle
+	if docName == "" {
+		docName = r.KnowledgeFilename
+	}
+	if docName != "" {
+		return fmt.Sprintf(` source_type="knowledge_base" source_doc="%s"`, escapeXMLAttr(docName))
+	}
+	return ` source_type="knowledge_base"`
+}
+
+// escapeXMLAttr escapes characters that must not appear raw inside an XML attribute value.
+func escapeXMLAttr(s string) string {
+	s = strings.ReplaceAll(s, `&`, `&amp;`)
+	s = strings.ReplaceAll(s, `"`, `&quot;`)
+	s = strings.ReplaceAll(s, `<`, `&lt;`)
+	s = strings.ReplaceAll(s, `>`, `&gt;`)
+	return s
 }
 
 // getEnrichedPassageForChat 合并Content和ImageInfo的文本内容，为聊天消息准备
