@@ -49,7 +49,7 @@ type knowledgeService struct {
 	chunkRepo       interfaces.ChunkRepository
 	tagRepo         interfaces.KnowledgeTagRepository
 	tagService      interfaces.KnowledgeTagService
-	fileSvc          interfaces.FileService
+	fileSvc         interfaces.FileService
 	modelService    interfaces.ModelService
 	task            interfaces.TaskEnqueuer
 	graphEngine     interfaces.RetrieveGraphRepository
@@ -212,10 +212,10 @@ func (s *knowledgeService) ListKnowledgeByKnowledgeBaseID(ctx context.Context,
 
 // ListPagedKnowledgeByKnowledgeBaseID returns paginated knowledge entries in a knowledge base
 func (s *knowledgeService) ListPagedKnowledgeByKnowledgeBaseID(ctx context.Context,
-	kbID string, page *types.Pagination, tagID string, keyword string, fileType string,
+	kbID string, page *types.Pagination, filter types.KnowledgeListFilter,
 ) (*types.PageResult, error) {
 	knowledges, total, err := s.repo.ListPagedKnowledgeByKnowledgeBaseID(ctx,
-		ctx.Value(types.TenantIDContextKey).(uint64), kbID, page, tagID, keyword, fileType)
+		ctx.Value(types.TenantIDContextKey).(uint64), kbID, page, filter)
 	if err != nil {
 		return nil, err
 	}
