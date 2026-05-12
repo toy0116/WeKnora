@@ -180,7 +180,8 @@ func (t *KnowledgeSearchTool) Execute(ctx context.Context, args json.RawMessage)
 	var userSpecifiedKBs []string
 	if len(input.KnowledgeBaseIDs) > 0 {
 		userSpecifiedKBs = input.KnowledgeBaseIDs
-		logger.Infof(ctx, "[Tool][KnowledgeSearch] User specified %d knowledge bases: %v", len(userSpecifiedKBs), userSpecifiedKBs)
+		logger.Infof(ctx, "[Tool][KnowledgeSearch] LLM narrowed search to %d knowledge bases: %v · names: %s",
+			len(userSpecifiedKBs), userSpecifiedKBs, t.formatKBNamesForLog(ctx, userSpecifiedKBs))
 	}
 
 	// Use pre-computed search targets, optionally filtered by user-specified KBs
@@ -210,7 +211,8 @@ func (t *KnowledgeSearchTool) Execute(ctx context.Context, args json.RawMessage)
 	}
 
 	kbIDs := searchTargets.GetAllKnowledgeBaseIDs()
-	logger.Infof(ctx, "[Tool][KnowledgeSearch] Using %d search targets across %d KBs", len(searchTargets), len(kbIDs))
+	logger.Infof(ctx, "[Tool][KnowledgeSearch] Using %d search targets across %d KBs: %s",
+		len(searchTargets), len(kbIDs), t.formatKBNamesForLog(ctx, kbIDs))
 
 	// Parse query parameter
 	queries := input.Queries
@@ -409,6 +411,40 @@ func (t *KnowledgeSearchTool) Execute(ctx context.Context, args json.RawMessage)
 	}
 	logger.Infof(ctx, "[Tool][KnowledgeSearch] Output: %s", result.Output)
 	return result, nil
+}
+
+// formatKBNamesForLog resolves KB UUIDs to "Name (uuid-prefix)" tokens so log
+// lines from agent tool calls show human-readable scope. Mirrors the helper
+// of the same name in handler/session/qa.go — kept local here to avoid a
+// package-boundary import. Failure to resolve any single ID falls back to
+// "? (prefix)" rather than dropping the entry — partial visibility beats none.
+func (t *KnowledgeSearchTool) formatKBNamesForLog(ctx context.Context, kbIDs []string) string {
+	if len(kbIDs) == 0 {
+		return "[]"
+	}
+	nameByID := make(map[string]string, len(kbIDs))
+	if t.knowledgeBaseService != nil {
+		if kbs, err := t.knowledgeBaseService.GetKnowledgeBasesByIDsOnly(ctx, kbIDs); err == nil {
+			for _, kb := range kbs {
+				if kb != nil {
+					nameByID[kb.ID] = kb.Name
+				}
+			}
+		}
+	}
+	parts := make([]string, 0, len(kbIDs))
+	for _, id := range kbIDs {
+		prefix := id
+		if len(prefix) > 8 {
+			prefix = prefix[:8]
+		}
+		if name, ok := nameByID[id]; ok && name != "" {
+			parts = append(parts, fmt.Sprintf("%s (%s)", name, prefix))
+		} else {
+			parts = append(parts, fmt.Sprintf("? (%s)", prefix))
+		}
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // getKnowledgeBaseTypes fetches knowledge base types for the given IDs

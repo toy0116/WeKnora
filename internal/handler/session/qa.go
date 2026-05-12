@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,9 +114,12 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	// Merge @mentioned items into knowledge_base_ids and knowledge_ids
 	kbIDs, knowledgeIDs := mergeKnowledgeTargets(request.KnowledgeBaseIDs, request.KnowledgeIds, request.MentionedItems)
 
-	// Log merge results for debugging
-	logger.Infof(ctx, "[%s] @mention merge: request.KnowledgeBaseIDs=%v, request.MentionedItems=%d, merged kbIDs=%v, merged knowledgeIDs=%v",
-		logPrefix, request.KnowledgeBaseIDs, len(request.MentionedItems), kbIDs, knowledgeIDs)
+	// Log merge results for debugging. KB IDs are resolved to "Name (uuid-prefix)"
+	// so a later grep of "knowledge bases used" tells us exactly which KBs the
+	// retrieval was scoped to — crucial when chasing lopsided / wrong-scope
+	// session bugs where a UI selection mismatch silently narrowed the search.
+	logger.Infof(ctx, "[%s] @mention merge: request.KnowledgeBaseIDs=%v, request.MentionedItems=%d, merged kbIDs=%v, merged knowledgeIDs=%v, knowledge bases used: %s",
+		logPrefix, request.KnowledgeBaseIDs, len(request.MentionedItems), kbIDs, knowledgeIDs, h.formatKBListForLog(ctx, kbIDs))
 
 	// Process inline base64 images: decode and save to storage.
 	// VLM analysis for RAG paths is deferred to the pipeline rewrite step.
@@ -312,6 +316,48 @@ func mergeKnowledgeTargets(requestKBIDs []string, requestKnowledgeIDs []string, 
 		}
 	}
 	return kbIDs, knowledgeIDs
+}
+
+// formatKBListForLog resolves KB UUIDs to human-readable "Name (uuid-prefix)"
+// strings so log lines like
+//
+//	knowledge bases used: [Marketing_Insight (2fbcbf27), Robustel_Datasheet (44454b26)]
+//
+// can be grepped after the fact when a session produces lopsided / wrong-scope
+// retrieval. Failure to resolve any individual ID falls back to the raw UUID
+// rather than dropping it — partial visibility beats none. Empty input
+// returns "[]" so the surrounding format string stays readable.
+//
+// Performance: one batch call to GetKnowledgeBasesByIDsOnly per log point,
+// which is already cached at session-pipeline level. Cost is negligible
+// next to a chat call.
+func (h *Handler) formatKBListForLog(ctx context.Context, kbIDs []string) string {
+	if len(kbIDs) == 0 {
+		return "[]"
+	}
+	nameByID := make(map[string]string, len(kbIDs))
+	if h.knowledgebaseService != nil {
+		if kbs, err := h.knowledgebaseService.GetKnowledgeBasesByIDsOnly(ctx, kbIDs); err == nil {
+			for _, kb := range kbs {
+				if kb != nil {
+					nameByID[kb.ID] = kb.Name
+				}
+			}
+		}
+	}
+	parts := make([]string, 0, len(kbIDs))
+	for _, id := range kbIDs {
+		prefix := id
+		if len(prefix) > 8 {
+			prefix = prefix[:8]
+		}
+		if name, ok := nameByID[id]; ok && name != "" {
+			parts = append(parts, fmt.Sprintf("%s (%s)", name, prefix))
+		} else {
+			parts = append(parts, fmt.Sprintf("? (%s)", prefix))
+		}
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // sseStreamContext holds the context for SSE streaming
@@ -568,9 +614,15 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 	reqCtx.assistantMessage = assistantMessagePtr
 
 	if mode == qaModeNormal {
-		logger.Infof(ctx, "Using knowledge bases: %v", reqCtx.knowledgeBaseIDs)
+		logger.Infof(ctx, "Using knowledge bases: %v · resolved names: %s",
+			reqCtx.knowledgeBaseIDs, h.formatKBListForLog(ctx, reqCtx.knowledgeBaseIDs))
 	} else {
-		logger.Infof(ctx, "Calling agent QA service, session ID: %s", sessionID)
+		// Agent path: chat-level KB selection (what the user picked in the
+		// sidebar) is logged here. The agent may subsequently narrow further
+		// via tool args — those calls log their own per-tool kb_ids resolution
+		// inside knowledge_search / grep_chunks.
+		logger.Infof(ctx, "Calling agent QA service, session ID: %s · KB scope: %s",
+			sessionID, h.formatKBListForLog(ctx, reqCtx.knowledgeBaseIDs))
 	}
 
 	// Setup SSE stream

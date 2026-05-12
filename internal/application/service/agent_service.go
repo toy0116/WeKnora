@@ -526,7 +526,7 @@ func (s *agentService) registerTools(
 			// chat_pipeline.tagEntityMismatches). The function param `config`
 			// here is *types.AgentConfig (local), distinct from the package
 			// `config`; aliases live on the global *config.Config via s.cfg.
-			toolToRegister = tools.NewGrepChunksTool(s.db, config.SearchTargets, s.cfg.EntityAliases, s.cfg.DocClasses)
+			toolToRegister = tools.NewGrepChunksTool(s.db, config.SearchTargets, s.cfg.EntityAliases, s.cfg.DocClasses, s.knowledgeBaseService)
 			logger.Infof(ctx, "Registered grep_chunks tool with searchTargets: %d targets", len(config.SearchTargets))
 		case tools.ToolListKnowledgeChunks:
 			toolToRegister = tools.NewListKnowledgeChunksTool(s.knowledgeService, s.chunkService, config.SearchTargets, s.cfg.DocClasses, s.cfg.EntityAliases)

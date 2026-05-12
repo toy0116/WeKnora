@@ -14,6 +14,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"gorm.io/gorm"
 )
 
@@ -91,19 +92,25 @@ type GrepChunksTool struct {
 	// Rule 13 of the system prompt to decide whether the chunk is
 	// authoritative for product-spec claims. Optional — nil = no tagging.
 	docClasses *config.DocClassConfig
+	// kbService resolves KB UUIDs to human-readable names at log time so
+	// the [Tool][GrepChunks] log line shows "KBs (names): [Marketing_Insight,
+	// Robustel_Datasheet]" alongside the raw UUIDs. Optional — when nil the
+	// log degrades to UUID-only.
+	kbService interfaces.KnowledgeBaseService
 
 	mu          sync.Mutex
 	seenChunks  map[string]bool
 }
 
 // NewGrepChunksTool creates a new grep chunks tool.
-// entityAliases and docClasses may both be nil — the tool degrades to its
-// pre-fix output shape.
+// entityAliases, docClasses, and kbService may all be nil — the tool degrades
+// to its pre-fix output shape (no entity tags, no doc_class, UUID-only logs).
 func NewGrepChunksTool(
 	db *gorm.DB,
 	searchTargets types.SearchTargets,
 	entityAliases *config.EntityAliasConfig,
 	docClasses *config.DocClassConfig,
+	kbService interfaces.KnowledgeBaseService,
 ) *GrepChunksTool {
 	return &GrepChunksTool{
 		BaseTool:      grepChunksTool,
@@ -111,8 +118,42 @@ func NewGrepChunksTool(
 		searchTargets: searchTargets,
 		entityAliases: entityAliases,
 		docClasses:    docClasses,
+		kbService:     kbService,
 		seenChunks:    make(map[string]bool),
 	}
+}
+
+// formatKBNamesForLog resolves KB UUIDs to "Name (uuid-prefix)" tokens for
+// readable agent tool logs. Mirrors the helper of the same name in
+// knowledge_search.go (kept local to avoid a package-boundary import).
+// Partial failures fall back to "? (prefix)" so the log line stays useful.
+func (t *GrepChunksTool) formatKBNamesForLog(ctx context.Context, kbIDs []string) string {
+	if len(kbIDs) == 0 {
+		return "[]"
+	}
+	nameByID := make(map[string]string, len(kbIDs))
+	if t.kbService != nil {
+		if kbs, err := t.kbService.GetKnowledgeBasesByIDsOnly(ctx, kbIDs); err == nil {
+			for _, kb := range kbs {
+				if kb != nil {
+					nameByID[kb.ID] = kb.Name
+				}
+			}
+		}
+	}
+	parts := make([]string, 0, len(kbIDs))
+	for _, id := range kbIDs {
+		prefix := id
+		if len(prefix) > 8 {
+			prefix = prefix[:8]
+		}
+		if name, ok := nameByID[id]; ok && name != "" {
+			parts = append(parts, fmt.Sprintf("%s (%s)", name, prefix))
+		} else {
+			parts = append(parts, fmt.Sprintf("? (%s)", prefix))
+		}
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // Execute executes the grep chunks tool
@@ -202,8 +243,8 @@ func (t *GrepChunksTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 		kbIDs = validKBs
 	}
 
-	logger.Infof(ctx, "[Tool][GrepChunks] Queries: %v, Limit: %d, KBs: %v, KnowledgeIDs: %v",
-		queries, limit, kbIDs, allowedKnowledgeIDs)
+	logger.Infof(ctx, "[Tool][GrepChunks] Queries: %v, Limit: %d, KBs: %v, KB names: %s, KnowledgeIDs: %v",
+		queries, limit, kbIDs, t.formatKBNamesForLog(ctx, kbIDs), allowedKnowledgeIDs)
 
 	results, err := t.searchChunks(ctx, queries, kbIDs, allowedKnowledgeIDs, kbTenantMap)
 	if err != nil {
