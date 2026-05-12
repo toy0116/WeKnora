@@ -1095,6 +1095,16 @@
                       </div>
                     </div>
 
+                    <!-- 数据分析阶段开关（quick-answer 模式下，针对 CSV/Excel 文件触发额外 SQL 生成） -->
+                    <div v-if="!isAgentMode && hasKnowledgeBase" class="setting-row">
+                      <div class="setting-info">
+                        <label>{{ $t('agentEditor.dataAnalysis.enableLabel') }}</label>
+                        <p class="desc">{{ $t('agentEditor.dataAnalysis.enableDesc') }}</p>
+                      </div>
+                      <div class="setting-control">
+                        <t-switch v-model="formData.config.data_analysis_enabled" />
+                      </div>
+                    </div>
                   </div>
                 </div>
 
