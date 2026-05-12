@@ -151,6 +151,14 @@ func NewRemoteChat(config *ChatConfig) (Chat, error) {
 	providerName := provider.ProviderName(config.Provider)
 	if providerName == "" {
 		providerName = provider.DetectProvider(config.BaseURL)
+	} else {
+		// URL-based detection overrides generic stored values (e.g. "openai").
+		// Some models are registered in DB with provider="openai" even though their
+		// base URL reveals a more specific provider (e.g. MiMo at xiaomimimo.com).
+		// When URL detection returns a concrete non-OpenAI provider, prefer it.
+		if urlDetected := provider.DetectProvider(config.BaseURL); urlDetected != "" && urlDetected != provider.ProviderOpenAI {
+			providerName = urlDetected
+		}
 	}
 
 	remoteChat, err := NewRemoteAPIChat(config)

@@ -286,6 +286,47 @@ type mimoChatCompletionRequest struct {
 	StreamOptions *openai.StreamOptions `json:"stream_options,omitempty"`
 }
 
+// sanitizeMimoMessages removes assistant→tool-result pairs where the assistant
+// message contains tool_calls but no reasoning_content.
+//
+// Background: MiMo thinking-mode API requires that every assistant message
+// carrying tool_calls also includes reasoning_content. Historical messages
+// stored before the ReasoningContent fix don't have that field, so we drop
+// the entire call+result group to avoid HTTP 400 from the MiMo API.
+func sanitizeMimoMessages(msgs []Message) []Message {
+	// Collect tool-call IDs from problematic assistant messages.
+	badCallIDs := map[string]bool{}
+	skipIdx := map[int]bool{}
+
+	for i, m := range msgs {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.ReasoningContent == "" {
+			skipIdx[i] = true
+			for _, tc := range m.ToolCalls {
+				badCallIDs[tc.ID] = true
+			}
+		}
+	}
+
+	// Also drop the tool-result messages whose call ID was marked bad.
+	for i, m := range msgs {
+		if m.Role == "tool" && badCallIDs[m.ToolCallID] {
+			skipIdx[i] = true
+		}
+	}
+
+	if len(skipIdx) == 0 {
+		return msgs // fast path: nothing to remove
+	}
+
+	result := make([]Message, 0, len(msgs)-len(skipIdx))
+	for i, m := range msgs {
+		if !skipIdx[i] {
+			result = append(result, m)
+		}
+	}
+	return result
+}
+
 // mimoRequestCustomizer 为 MiMo 构建请求，从 originalMsgs 读取 ReasoningContent，
 // 在 assistant 消息中回传 reasoning_content 字段，避免 API 返回 400。
 func mimoRequestCustomizer(
@@ -303,8 +344,11 @@ func mimoRequestCustomizer(
 		mimoReq.ToolChoice = req.ToolChoice
 	}
 
-	msgs := make([]mimoMessage, 0, len(originalMsgs))
-	for _, m := range originalMsgs {
+	// Drop historical tool_call groups that lack reasoning_content.
+	sanitized := sanitizeMimoMessages(originalMsgs)
+
+	msgs := make([]mimoMessage, 0, len(sanitized))
+	for _, m := range sanitized {
 		mm := mimoMessage{
 			Role:             m.Role,
 			Content:          m.Content,
