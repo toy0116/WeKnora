@@ -2737,6 +2737,8 @@ export default {
     },
     knowledgeBase: "知识库",
     knowledgeBaseWithCount: "知识库({count})",
+    scopeSummary: "搜索范围",
+    scopeSummaryHint: "点击调整本次检索的知识库范围",
     notConfigured: "未配置",
     sharedAgentModelLabel: "共享智能体配置的模型",
     model: "模型",

@@ -2777,6 +2777,8 @@ export default {
     },
     knowledgeBase: "지식베이스",
     knowledgeBaseWithCount: "지식베이스({count})",
+    scopeSummary: "검색 범위",
+    scopeSummaryHint: "이번 질문이 검색할 지식베이스를 조정하려면 클릭하세요",
     notConfigured: "구성되지 않음",
     sharedAgentModelLabel: "공유 에이전트에 구성된 모델",
     model: "모델",

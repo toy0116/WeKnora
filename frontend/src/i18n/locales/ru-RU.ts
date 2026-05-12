@@ -3125,6 +3125,8 @@ export default {
     },
     knowledgeBase: 'База знаний',
     knowledgeBaseWithCount: 'База знаний ({count})',
+    scopeSummary: 'Область поиска',
+    scopeSummaryHint: 'Нажмите, чтобы изменить, в каких базах знаний будет искаться этот запрос',
     notConfigured: 'Не настроено',
     sharedAgentModelLabel: 'Модель из общего агента',
     model: 'Модель',

@@ -432,6 +432,21 @@ const selectedFiles = computed(() => {
   });
 });
 
+// Scope summary: a one-line "Search scope: A · B · C +N" rendered above the
+// textarea so the user sees, at typing time, exactly which knowledge bases
+// the question will hit. Direct fix for the f438430e diagnosis blind spot:
+// the chip strip already lists selected KBs but its visual density makes
+// "how many KBs am I about to search" hard to read at a glance. The text
+// label "搜索范围:" pins the semantics, and we cap the inline names at 3
+// so an 8-KB selection doesn't blow out the input footer width.
+const scopeNamesText = computed(() => {
+  const names = selectedKbs.value.map(kb => kb.name).filter(Boolean);
+  if (names.length === 0) return '';
+  const head = names.slice(0, 3).join(' · ');
+  if (names.length <= 3) return head;
+  return `${head} · +${names.length - 3}`;
+});
+
   // 合并所有选中项（用于输入框内显示）
   // 现在智能体配置的知识库也在 store 中，统一从 selectedKbs 获取
   const allSelectedItems = computed(() => {
@@ -2027,6 +2042,25 @@ defineExpose({
         @update:files="uploadedAttachments = $event"
       />
       
+      <!-- 搜索范围概要：一行小字 · 列出当前 chat 将要检索的 KB 名字。
+           直接对应那次 f438430e 诊断盲点——chip 条堆叠多了视觉负担重，
+           用户扫不出"我的 query 实际会打到哪几个 KB"。这行用前缀
+           "搜索范围:" 把语义钉死, 默认列前 3 个名字, 多了显示 "+N"。
+           点击直接打开 KB 选择器调整。隐藏在没选 KB 时。 -->
+      <div
+        v-if="selectedKbs.length > 0"
+        class="scope-summary"
+        :title="$t('input.scopeSummaryHint')"
+        @click="toggleKbSelector"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="scope-summary__icon">
+          <circle cx="11" cy="11" r="7"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <span class="scope-summary__label">{{ $t('input.scopeSummary') }}:</span>
+        <span class="scope-summary__names">{{ scopeNamesText }}</span>
+      </div>
+
         <!-- 选中的知识库和文件标签（显示在输入框内顶部） -->
       <div v-if="allSelectedItems.length > 0" class="selected-tags-inline">
         <span 
@@ -2367,6 +2401,47 @@ const getImgSrc = (url: string) => {
   }
 }
 
+/* 搜索范围概要：一行小字，告诉用户当前 chat 实际会打到哪几个 KB。
+   与 .selected-tags-inline 并列时占顶部圆角；单独存在时也独占顶部。
+   悬停高亮 + 点击打开 KB 选择器，可被键盘 / 鼠标统一访问。 */
+.scope-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 5px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--td-text-color-secondary, #5d6573);
+  background: var(--td-bg-color-container, #fff);
+  border-radius: 11px 11px 0 0;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: .5px solid var(--td-component-stroke, #e7e7e7);
+
+  &:hover {
+    color: var(--td-brand-color, #07C05F);
+    background: var(--td-bg-color-secondary-container, #fafafa);
+  }
+}
+
+.scope-summary__icon {
+  flex-shrink: 0;
+  color: var(--td-text-color-placeholder, #9aa1ad);
+}
+
+.scope-summary__label {
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.scope-summary__names {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* 选中的知识库/文件标签（mention list 已选项） */
 .selected-tags-inline {
   display: flex;
@@ -2377,6 +2452,11 @@ const getImgSrc = (url: string) => {
   border-bottom: .5px solid var(--td-component-stroke, #e7e7e7);
   background: var(--td-bg-color-container, #fff);
   border-radius: 11px 11px 0 0; /* 与 .rich-input-container 内缘上边圆角一致（12px - 1px 边框） */
+}
+
+/* 当 scope-summary 在上面时，chip 条不再独占顶部圆角，避免双圆角错位。 */
+.scope-summary + .selected-tags-inline {
+  border-radius: 0;
 }
 
 .mention-chip {

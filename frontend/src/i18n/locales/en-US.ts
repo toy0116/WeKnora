@@ -1479,6 +1479,8 @@ export default {
     },
     knowledgeBase: 'Knowledge Base',
     knowledgeBaseWithCount: 'Knowledge Base ({count})',
+    scopeSummary: 'Search scope',
+    scopeSummaryHint: 'Click to adjust which knowledge bases this question searches',
     notConfigured: 'Not configured',
     sharedAgentModelLabel: 'Model from shared agent',
     model: 'Model',
