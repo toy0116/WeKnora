@@ -94,6 +94,14 @@ classes:
       - "(?i)Litmus|Kepware|KepServerEX|EMQX|NeuronEX|EdgeLink|N3uron|Ignition|Teltonika|Honeywell|Niagara|Tridium|N3uron"
       - "(?i)应对.*市场竞争"
       - "(?i)与.+(对比|比较|集成|框架).*(可行性|分析|策略|应用)"
+      # Vendor brochures / marketing collateral. Files like
+      # "milesight-iot-brochure-collection-en.pdf" describe the vendor's full
+      # catalogue with self-promotional specs — when they land in a
+      # competitor-tracking KB (Marketing_Insight), they're competitive
+      # reference material, NOT independent industry research. Title pattern
+      # below catches the common surface forms while leaving competitor
+      # datasheets alone (those still hit the `product` class earlier).
+      - "(?i)\\bbrochure\\b|product[-_ ]?catalog(ue)?|宣传.{0,2}册|产品.{0,2}画册"
 
   # ── research: industry research / trend reports / market sizing ────────
   # INDUSTRY-WIDE patterns, NOT Robustel-specific features.

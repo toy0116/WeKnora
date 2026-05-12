@@ -63,6 +63,8 @@ func (s *stubKnowledgeBaseService) TogglePinKnowledgeBase(context.Context, strin
 	return nil, nil
 }
 
+func (s *stubKnowledgeBaseService) RefreshDocClassKBDefaults(context.Context) {}
+
 func (s *stubKnowledgeBaseService) HybridSearch(context.Context, string, types.SearchParams) ([]*types.SearchResult, error) {
 	return s.results, nil
 }

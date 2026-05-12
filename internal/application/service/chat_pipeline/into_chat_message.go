@@ -119,24 +119,12 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 		return next()
 	}
 
-	// Direction B: tag KB chunks whose entity family mismatches the query anchor.
-	// This stampsMetadata["entity_mismatch"]="true" and Metadata["entity_owner"]="X"
-	// on mismatched chunks BEFORE we render them into XML, so buildContextAttributes
-	// can surface the signal to the LLM.
-	if p.config != nil && p.config.EntityAliases != nil {
-		tagEntityMismatches(ctx,
-			chatManage.Query,
-			chatManage.RewriteQuery,
-			p.config.EntityAliases,
-			chatManage.MergeResult,
-		)
-	}
-
-	// Direction C: tag each KB chunk with its source-document doc_class
-	// (product / strategy / competitive / research / training / solution /
-	// internal). Resolves via title pattern, then KB-default fallback.
-	// Skips web-search chunks since classification keys off knowledge titles.
-	// Sets r.Metadata["doc_class"] so buildContextAttributes can emit it.
+	// Direction C (runs first so Direction B can read doc_class): tag each KB
+	// chunk with its source-document doc_class (product / strategy /
+	// competitive / research / training / solution / internal). Resolves via
+	// title pattern, then KB-default fallback. Skips web-search chunks since
+	// classification keys off knowledge titles. Sets r.Metadata["doc_class"]
+	// so buildContextAttributes can emit it.
 	if p.config != nil && p.config.DocClasses != nil {
 		for _, r := range chatManage.MergeResult {
 			isWeb := strings.ToLower(r.KnowledgeSource) == "web_search" ||
@@ -155,7 +143,37 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 		}
 	}
 
+	// Direction B: tag KB chunks with brand-attribution metadata. Three signals:
+	//   - entity_owner   (every chunk with a single brand — anchor-free)
+	//   - entity_aliases (alternate yaml-curated names for that brand)
+	//   - entity_mismatch (only when query anchored a brand ≠ chunk's brand)
+	// Returns a non-empty <retrieval_gap> block when the query anchored ≥ 2
+	// brands but the chunks failed to cover one or more of them with
+	// authoritative product evidence (doc_class="product"). Mere brand
+	// mentions in competitive/strategy/research chunks don't satisfy
+	// coverage — they're the WRONG class for product-vs-product claims
+	// (Rule 8). Block is prepended below so the LLM refuses to serve a
+	// lopsided comparison instead of papering over the asymmetry.
+	var retrievalGapWarning string
+	if p.config != nil && p.config.EntityAliases != nil {
+		retrievalGapWarning = tagEntityMismatches(ctx,
+			chatManage.Query,
+			chatManage.RewriteQuery,
+			p.config.EntityAliases,
+			chatManage.MergeResult,
+		)
+	}
+
 	var contextsBuilder strings.Builder
+
+	// Prepend the retrieval_gap warning ABOVE the document inventory so the
+	// LLM sees the comparison-asymmetry signal before reading any chunk and
+	// can choose to refuse the comparison rather than answer lopsidedly.
+	// Empty when no gap was detected (single-brand queries, balanced
+	// coverage, web-search-only retrievals, etc.).
+	if retrievalGapWarning != "" {
+		contextsBuilder.WriteString(retrievalGapWarning)
+	}
 
 	// Collect unique document metadata (title + description), once per knowledge
 	allResults := chatManage.MergeResult

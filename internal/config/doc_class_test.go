@@ -36,6 +36,11 @@ func fixtureDocClassConfig() *DocClassConfig {
 					`(?i)基准.{0,3}分析`,
 					`(?i)Litmus|Kepware|Teltonika`,
 					`(?i)In-Depth Analysis of`,
+					// Vendor product brochures / marketing collateral —
+					// classified as competitive when they live in a
+					// competitor-tracking KB (Marketing_Insight). See
+					// TestClassify_CompetitiveFromBrochure.
+					`(?i)\bbrochure\b|product[-_ ]?catalog(ue)?|宣传.{0,2}册|产品.{0,2}画册`,
 				},
 			},
 			// research BEFORE strategy: "深度战略研究报告" is research first.
@@ -106,6 +111,40 @@ func TestClassify_CompetitiveFromBenchmark(t *testing.T) {
 	} {
 		if got := cfg.Classify(title, ""); got != "competitive" {
 			t.Errorf("title=%q: expected competitive, got %q", title, got)
+		}
+	}
+}
+
+func TestClassify_CompetitiveFromBrochure(t *testing.T) {
+	// Regression for the f438430e session: "milesight-iot-brochure-collection-en.pdf"
+	// fell through all title patterns and landed on the Marketing_Insight
+	// kb_default (research). It should be `competitive` because a vendor's
+	// own product brochure is marketing collateral about a competitor —
+	// closer to "competitor analysis" than to "industry research".
+	//
+	// Also asserts the title pattern beats the kb_default fallback (since
+	// title patterns match BEFORE the kbID resolution step).
+	cfg := fixtureDocClassConfig()
+	cfg.KBDefaults = map[string]string{"Marketing_Insight": "research"}
+	cfg.ResolveKBDefaults([]KBSummary{{ID: "kb-mi", Name: "Marketing_Insight"}})
+
+	cases := []struct {
+		title, kbID, want string
+	}{
+		{"milesight-iot-brochure-collection-en.pdf", "kb-mi", "competitive"},
+		{"Teltonika-IoT-Brochure-2024.pdf", "kb-mi", "competitive"},
+		{"星纵物联产品宣传册.pdf", "kb-mi", "competitive"},
+		{"Honeywell-Industrial-Product-Catalog-v3.pdf", "kb-mi", "competitive"},
+		{"some-vendor-product_catalogue.pdf", "kb-mi", "competitive"},
+		// Negative: a competitor datasheet (with "Datasheet" in title) still
+		// hits product first (more specific) — brochure pattern doesn't
+		// override product. Datasheets are spec-of-record regardless of
+		// whose KB they sit in.
+		{"ur75-datasheet-en.pdf", "kb-mi", "product"},
+	}
+	for _, c := range cases {
+		if got := cfg.Classify(c.title, c.kbID); got != c.want {
+			t.Errorf("title=%q kbID=%q: expected %q, got %q", c.title, c.kbID, c.want, got)
 		}
 	}
 }
