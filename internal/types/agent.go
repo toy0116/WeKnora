@@ -200,10 +200,11 @@ type ToolCall struct {
 
 // AgentStep represents one iteration of the ReAct loop
 type AgentStep struct {
-	Iteration int        `json:"iteration"`  // Iteration number (0-indexed)
-	Thought   string     `json:"thought"`    // LLM's reasoning/thinking (Think phase)
-	ToolCalls []ToolCall `json:"tool_calls"` // Tools called in this step (Act phase)
-	Timestamp time.Time  `json:"timestamp"`  // When this step occurred
+	Iteration       int        `json:"iteration"`                  // Iteration number (0-indexed)
+	Thought         string     `json:"thought"`                    // LLM's reasoning/thinking (Think phase)
+	ThinkingContent string     `json:"thinking_content,omitempty"` // 原始思考内容（reasoning_content），MiMo 等模型多轮时需回传
+	ToolCalls       []ToolCall `json:"tool_calls"`                 // Tools called in this step (Act phase)
+	Timestamp       time.Time  `json:"timestamp"`                  // When this step occurred
 }
 
 // GetObservations returns observations from all tool calls in this step

@@ -81,8 +81,10 @@ type RemoteAPIChat struct {
 	customHeaders map[string]string
 
 	// requestCustomizer 允许子类自定义请求
+	// originalMsgs 为调用前的原始 chat.Message 切片，包含 ReasoningContent 等字段，
+	// 供需要回传 reasoning_content 的 provider（如 MiMo）直接使用。
 	// 返回自定义请求体（如果为 nil 则使用标准请求）和是否需要使用原始 HTTP 请求
-	requestCustomizer func(req *openai.ChatCompletionRequest, opts *ChatOptions, isStream bool) (customReq any, useRawHTTP bool)
+	requestCustomizer func(req *openai.ChatCompletionRequest, originalMsgs []Message, opts *ChatOptions, isStream bool) (customReq any, useRawHTTP bool)
 
 	// endpointCustomizer 允许子类自定义请求的 endpoint
 	// 返回是否使用自定义请求地址, 返回空则使用默认OpenAI格式地址
@@ -164,7 +166,7 @@ func NewRemoteAPIChat(chatConfig *ChatConfig) (*RemoteAPIChat, error) {
 }
 
 // SetRequestCustomizer 设置请求自定义器
-func (c *RemoteAPIChat) SetRequestCustomizer(customizer func(req *openai.ChatCompletionRequest, opts *ChatOptions, isStream bool) (any, bool)) {
+func (c *RemoteAPIChat) SetRequestCustomizer(customizer func(req *openai.ChatCompletionRequest, originalMsgs []Message, opts *ChatOptions, isStream bool) (any, bool)) {
 	c.requestCustomizer = customizer
 }
 
@@ -354,9 +356,9 @@ func (c *RemoteAPIChat) Chat(ctx context.Context, messages []Message, opts *Chat
 	if c.endpointCustomizer != nil {
 		customEndpoint = c.endpointCustomizer(c.baseURL, c.modelID, true)
 	}
-	// 检查是否需要自定义请求
+	// 检查是否需要自定义请求（传入原始 messages，供需要 reasoning_content 的 provider 读取）
 	if c.requestCustomizer != nil {
-		customReq, useRawHTTP := c.requestCustomizer(&req, opts, false)
+		customReq, useRawHTTP := c.requestCustomizer(&req, messages, opts, false)
 		if useRawHTTP && customReq != nil {
 			return c.chatWithRawHTTP(timeoutCtx, customEndpoint, customReq)
 		}
@@ -528,9 +530,9 @@ func (c *RemoteAPIChat) ChatStream(ctx context.Context, messages []Message, opts
 		customEndpoint = c.endpointCustomizer(c.baseURL, c.modelID, true)
 	}
 
-	// 检查是否需要自定义请求
+	// 检查是否需要自定义请求（传入原始 messages，供需要 reasoning_content 的 provider 读取）
 	if c.requestCustomizer != nil {
-		customReq, useRawHTTP := c.requestCustomizer(&req, opts, true)
+		customReq, useRawHTTP := c.requestCustomizer(&req, messages, opts, true)
 		if useRawHTTP && customReq != nil {
 			ch, err := c.chatStreamWithRawHTTP(timeoutCtx, customEndpoint, customReq)
 			return wrapStreamCancel(ch, err, cancel)

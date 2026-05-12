@@ -239,9 +239,10 @@ func (e *AgentEngine) streamThinkingToEventBus(
 	}
 
 	resp := &types.ChatResponse{
-		Content:      fullContent,
-		ToolCalls:    llmResult.ToolCalls,
-		FinishReason: finishReason,
+		Content:         fullContent,
+		ThinkingContent: llmResult.ThinkingContent, // 保留思考内容，供下一轮以 reasoning_content 回传给 MiMo 等模型
+		ToolCalls:       llmResult.ToolCalls,
+		FinishReason:    finishReason,
 	}
 	if llmResult.Usage != nil {
 		resp.Usage = *llmResult.Usage
