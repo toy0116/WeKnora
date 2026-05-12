@@ -766,7 +766,9 @@ const isThinkingActive = (eventId: string): boolean => {
 };
 
 // Watch event stream to auto-expand thinking events and auto-collapse when non-thinking follows
-watch(eventStream, (stream) => {
+// Use length-only watch (not deep) — stream is append-only; deep traversal is O(n) per token.
+watch(() => eventStream.value.length, () => {
+  const stream = eventStream.value;
   if (!stream || !Array.isArray(stream)) return;
 
   // Scan stream to find thinking events to expand and collapse
@@ -824,7 +826,7 @@ watch(eventStream, (stream) => {
       }
     }
   });
-}, { immediate: true, deep: true });
+}, { immediate: true });
 
 // State for intermediate steps collapse
 const showIntermediateSteps = ref(false);
@@ -832,7 +834,9 @@ const showIntermediateSteps = ref(false);
 // Track whether answer has started streaming (for early collapse)
 const hasAnswerStarted = ref(false);
 const agentDurationMs = ref<number>(0);
-watch(eventStream, (stream) => {
+// Length-only watch — avoids O(n) deep traversal on every appended token.
+watch(() => eventStream.value.length, () => {
+  const stream = eventStream.value;
   if (!stream || !Array.isArray(stream)) return;
 
   // Check for agent_complete event with authoritative duration from backend
@@ -849,7 +853,7 @@ watch(eventStream, (stream) => {
   if (hasAnswer) {
     hasAnswerStarted.value = true;
   }
-}, { deep: true, immediate: true });
+}, { immediate: true });
 
 
 // Check if conversation is done (based on answer event with done=true or stop event)
@@ -1783,10 +1787,23 @@ const restoreRenderableHtmlPlaceholders = (html: string, htmlSnippets: string[])
 const agentRenderer = new marked.Renderer();
 agentRenderer.code = createMermaidCodeRenderer('mermaid-agent');
 
+// Memoization cache for renderMarkdownContent.
+// During streaming the LLM appends tokens to the last event's content, so each
+// call has a different (longer) string — no cache hit there. But all *historical*
+// events (earlier thinking/tool_call/answer blocks) never change after they are
+// done, so they get a cache hit on every subsequent re-render. This eliminates
+// the O(events) redundant work that was running on every SSE token arrival.
+const _mdCache = new Map<string, string>();
+const _MD_CACHE_MAX = 500; // prevent unbounded growth in very long sessions
+
 // 单次渲染 Markdown 内容（替代 token-by-token，修复 KaTeX 公式在 streaming 时闪烁消失的问题）
 const renderMarkdownContent = (content: any): string => {
   const contentStr = typeof content === 'string' ? content : String(content || '');
   if (!contentStr.trim()) return '';
+
+  // Fast path: return cached result for previously rendered content strings.
+  const cached = _mdCache.get(contentStr);
+  if (cached !== undefined) return cached;
 
   // Extract <kb.../> and <web.../> tags before sanitization to prevent
   // sanitizeForDisplay from stripping chunk_id labels and UUIDs inside them.
@@ -1831,7 +1848,14 @@ const renderMarkdownContent = (content: any): string => {
   const html = marked.parse(markdownWithPlaceholders, { renderer: agentRenderer }) as string;
   const htmlWithCitations = restoreRenderableHtmlPlaceholders(html, htmlSnippets);
   const protectedHTML = protectProviderImageSrcInHTML(htmlWithCitations);
-  return DOMPurify.sanitize(protectedHTML, DOMPurifyConfig);
+  const result = DOMPurify.sanitize(protectedHTML, DOMPurifyConfig);
+
+  // Store in cache. Evict oldest entry when the cache grows too large.
+  if (_mdCache.size >= _MD_CACHE_MAX) {
+    _mdCache.delete(_mdCache.keys().next().value!);
+  }
+  _mdCache.set(contentStr, result);
+  return result;
 };
 
 // Renders an answer event's content. Strips final-answer wrappers
