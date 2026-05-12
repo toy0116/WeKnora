@@ -25,6 +25,7 @@ type qaRequestContext struct {
 	c                 *gin.Context
 	sessionID         string
 	requestID         string
+	receivedAt        time.Time // Wall-clock time the handler started processing the request
 	query             string
 	session           *types.Session
 	customAgent       *types.CustomAgent
@@ -64,8 +65,11 @@ func (rc *qaRequestContext) buildQARequest() *types.QARequest {
 
 // parseQARequest parses and validates a QA request, returns the request context
 func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestContext, *CreateKnowledgeQARequest, error) {
+	receivedAt := time.Now()
 	ctx := logger.CloneContext(c.Request.Context())
-	logger.Infof(ctx, "[%s] Start processing request", logPrefix)
+	requestID := secutils.SanitizeForLog(c.GetString(types.RequestIDContextKey.String()))
+	logger.Infof(ctx, "[%s] TTFB:start request_id=%s received_at=%d",
+		logPrefix, requestID, receivedAt.UnixMilli())
 
 	// Get session ID from URL parameter
 	sessionID := secutils.SanitizeForLog(c.Param("session_id"))
@@ -208,7 +212,8 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		ctx:         ctx,
 		c:           c,
 		sessionID:   sessionID,
-		requestID:   secutils.SanitizeForLog(c.GetString(types.RequestIDContextKey.String())),
+		requestID:   requestID,
+		receivedAt:  receivedAt,
 		query:       secutils.SanitizeForLog(request.Query),
 		session:     session,
 		customAgent: customAgent,
@@ -401,7 +406,7 @@ func (h *Handler) setupSSEStream(reqCtx *qaRequestContext, generateTitle bool) *
 
 	// Setup stream handler
 	h.setupStreamHandler(asyncCtx, reqCtx.sessionID, reqCtx.assistantMessage.ID,
-		reqCtx.requestID, reqCtx.assistantMessage, eventBus)
+		reqCtx.requestID, reqCtx.receivedAt, reqCtx.assistantMessage, eventBus)
 
 	// Touch session updated_at so the sidebar always shows this session in the
 	// correct time bucket (e.g. "今天") for every message, not just the first one.
