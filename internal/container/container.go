@@ -317,6 +317,12 @@ func BuildContainer(container *dig.Container) *dig.Container {
 		must(container.Invoke(router.RegisterSyncHandlers))
 	}
 
+	// Note on doc-class kb_defaults wiring: the *startup* resolve is wired in
+	// cmd/server/main.go where the bootstrap already lists KBs (the same list
+	// feeds the wiki entity-alias merge). Mutation-time refresh — Create /
+	// Update / Delete — is wired inside knowledgeBaseService itself; see
+	// RefreshDocClassKBDefaults() and its three call sites.
+
 	logger.Infof(ctx, "[Container] Container initialization completed successfully")
 	return container
 }

@@ -83,6 +83,12 @@ type KnowledgeBaseService interface {
 	// TogglePinKnowledgeBase toggles the pin status of a knowledge base
 	TogglePinKnowledgeBase(ctx context.Context, id string) (*types.KnowledgeBase, error)
 
+	// RefreshDocClassKBDefaults rebuilds the runtime kbID→doc_class map from
+	// the yaml-loaded `kb_defaults` (which is keyed by KB *name*) and the
+	// current database state. Called once at startup and after Create /
+	// Update / Delete so the map stays in sync with the database.
+	RefreshDocClassKBDefaults(ctx context.Context)
+
 	// HybridSearch performs hybrid search (vector + keywords) in the knowledge base
 	// Parameters:
 	//   - ctx: Context information

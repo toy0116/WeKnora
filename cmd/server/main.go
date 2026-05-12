@@ -106,9 +106,10 @@ func main() {
 
 		// Populate doc-class KB defaults: yaml's kb_defaults is keyed by KB
 		// name, but chunk-render code path passes KB UUIDs. Resolve once at
-		// startup so the classifier can look up by ID in O(1). KB
-		// create/rename will need to re-call ResolveKBDefaults; we'll wire
-		// that in the KB handler when the feature settles.
+		// startup so the classifier can look up by ID in O(1). Mutation-time
+		// re-resolve on Create / Update / Delete lives inside
+		// knowledgeBaseService.RefreshDocClassKBDefaults so renamed KBs and
+		// new KB names from kb_defaults pick up their class without a restart.
 		var kbs []*types.KnowledgeBase
 		if cfg.DocClasses != nil || cfg.EntityAliases != nil {
 			var err error

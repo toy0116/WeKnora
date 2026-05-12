@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/application/service/retriever"
+	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -31,6 +32,7 @@ type knowledgeBaseService struct {
 	fileSvc        interfaces.FileService
 	graphEngine    interfaces.RetrieveGraphRepository
 	asynqClient    interfaces.TaskEnqueuer
+	cfg            *config.Config
 }
 
 // NewKnowledgeBaseService creates a new knowledge base service
@@ -45,6 +47,7 @@ func NewKnowledgeBaseService(repo interfaces.KnowledgeBaseRepository,
 	fileSvc interfaces.FileService,
 	graphEngine interfaces.RetrieveGraphRepository,
 	asynqClient interfaces.TaskEnqueuer,
+	cfg *config.Config,
 ) interfaces.KnowledgeBaseService {
 	return &knowledgeBaseService{
 		repo:           repo,
@@ -58,7 +61,39 @@ func NewKnowledgeBaseService(repo interfaces.KnowledgeBaseRepository,
 		fileSvc:        fileSvc,
 		graphEngine:    graphEngine,
 		asynqClient:    asynqClient,
+		cfg:            cfg,
 	}
+}
+
+// RefreshDocClassKBDefaults rebuilds the runtime kbID→doc_class map from the
+// yaml-loaded `kb_defaults` (which is keyed by KB *name*) and the current
+// database state. Must be called once at startup and after any mutation that
+// changes the set of KB IDs or their names (Create / Update / Delete).
+//
+// No-op when doc_classes.yaml is absent or has no kb_defaults section —
+// the title-pattern-only path keeps working untouched.
+//
+// Listing failures are logged but not propagated: a stale kbDefaults map is
+// strictly less informative than the previous one, but it never blocks
+// retrieval. Title-pattern classification still works in either case.
+func (s *knowledgeBaseService) RefreshDocClassKBDefaults(ctx context.Context) {
+	if s.cfg == nil || s.cfg.DocClasses == nil || len(s.cfg.DocClasses.KBDefaults) == 0 {
+		return
+	}
+	kbs, err := s.repo.ListKnowledgeBases(ctx)
+	if err != nil {
+		logger.Warnf(ctx, "RefreshDocClassKBDefaults: ListKnowledgeBases failed (%v) — kb_defaults stale", err)
+		return
+	}
+	summaries := make([]config.KBSummary, 0, len(kbs))
+	for _, kb := range kbs {
+		if kb == nil {
+			continue
+		}
+		summaries = append(summaries, config.KBSummary{ID: kb.ID, Name: kb.Name})
+	}
+	s.cfg.DocClasses.ResolveKBDefaults(summaries)
+	logger.Infof(ctx, "doc-class: refreshed kb_defaults for %d KBs", len(summaries))
 }
 
 // GetRepository gets the knowledge base repository
@@ -95,6 +130,7 @@ func (s *knowledgeBaseService) CreateKnowledgeBase(ctx context.Context,
 	}
 
 	logger.Infof(ctx, "Knowledge base created successfully, ID: %s, name: %s", kb.ID, kb.Name)
+	s.RefreshDocClassKBDefaults(ctx)
 	return kb, nil
 }
 
@@ -329,6 +365,7 @@ func (s *knowledgeBaseService) UpdateKnowledgeBase(ctx context.Context,
 	}
 
 	logger.Infof(ctx, "Knowledge base updated successfully, ID: %s, name: %s", kb.ID, kb.Name)
+	s.RefreshDocClassKBDefaults(ctx)
 	return kb, nil
 }
 
@@ -373,6 +410,7 @@ func (s *knowledgeBaseService) DeleteKnowledgeBase(ctx context.Context, id strin
 		})
 		return err
 	}
+	s.RefreshDocClassKBDefaults(ctx)
 
 	// Step 1b: Remove all organization shares for this KB so org settings no longer show them
 	if delErr := s.shareRepo.DeleteByKnowledgeBaseID(ctx, id); delErr != nil {
