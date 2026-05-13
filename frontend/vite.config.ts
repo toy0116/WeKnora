@@ -9,6 +9,9 @@ import vueJsx from '@vitejs/plugin-vue-jsx'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 
+const pkg = require('./package.json') as { version?: string }
+const FRONTEND_VERSION = pkg.version ?? 'unknown'
+
 function resolveVueOfficePptxEntry(): string {
   try {
     const pkgDir = dirname(require.resolve('@vue-office/pptx/package.json'))
@@ -28,6 +31,9 @@ export default defineConfig({
   // LocalHub 将 WeKnora 挂载在 /app/weknora/ 下；
   // 不设 base 时 Vite 输出 /assets/... 绝对路径，浏览器直接请求 LocalHub 根路径导致 404。
   base: '/app/weknora/',
+  define: {
+    __FRONTEND_VERSION__: JSON.stringify(FRONTEND_VERSION),
+  },
   plugins: [
     vue(),
     vueJsx(),
