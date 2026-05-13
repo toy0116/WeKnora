@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Tencent/WeKnora/internal/application/service/retriever"
 	"github.com/Tencent/WeKnora/internal/config"
 	werrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/infrastructure/docparser"
@@ -36,25 +37,26 @@ var (
 // knowledgeService implements the knowledge service interface
 // service 实现知识服务接口
 type knowledgeService struct {
-	config           *config.Config
-	retrieveEngine   interfaces.RetrieveEngineRegistry
-	repo             interfaces.KnowledgeRepository
-	kbService        interfaces.KnowledgeBaseService
-	tenantRepo       interfaces.TenantRepository
-	tenantService    interfaces.TenantService
-	documentReader   interfaces.DocumentReader
-	chunkService     interfaces.ChunkService
-	chunkRepo        interfaces.ChunkRepository
-	tagRepo          interfaces.KnowledgeTagRepository
-	tagService       interfaces.KnowledgeTagService
+	config          *config.Config
+	retrieveEngine  interfaces.RetrieveEngineRegistry
+	ownership       retriever.TenantStoreOwnership
+	repo            interfaces.KnowledgeRepository
+	kbService       interfaces.KnowledgeBaseService
+	tenantRepo      interfaces.TenantRepository
+	tenantService   interfaces.TenantService
+	documentReader  interfaces.DocumentReader
+	chunkService    interfaces.ChunkService
+	chunkRepo       interfaces.ChunkRepository
+	tagRepo         interfaces.KnowledgeTagRepository
+	tagService      interfaces.KnowledgeTagService
 	fileSvc          interfaces.FileService
-	modelService     interfaces.ModelService
-	task             interfaces.TaskEnqueuer
-	graphEngine      interfaces.RetrieveGraphRepository
-	redisClient      *redis.Client
-	kbShareService   interfaces.KBShareService
-	imageResolver    *docparser.ImageResolver
-	taskPendingRepo  interfaces.TaskPendingOpsRepository
+	modelService    interfaces.ModelService
+	task            interfaces.TaskEnqueuer
+	graphEngine     interfaces.RetrieveGraphRepository
+	redisClient     *redis.Client
+	kbShareService  interfaces.KBShareService
+	imageResolver   *docparser.ImageResolver
+	taskPendingRepo interfaces.TaskPendingOpsRepository
 
 	// In-memory fallbacks for Lite mode (no Redis)
 	memFAQProgress      sync.Map // taskID -> *types.FAQImportProgress
@@ -86,6 +88,7 @@ func NewKnowledgeService(
 	task interfaces.TaskEnqueuer,
 	graphEngine interfaces.RetrieveGraphRepository,
 	retrieveEngine interfaces.RetrieveEngineRegistry,
+	ownership retriever.TenantStoreOwnership,
 	redisClient *redis.Client,
 	kbShareService interfaces.KBShareService,
 	imageResolver *docparser.ImageResolver,
@@ -109,6 +112,7 @@ func NewKnowledgeService(
 		task:            task,
 		graphEngine:     graphEngine,
 		retrieveEngine:  retrieveEngine,
+		ownership:       ownership,
 		redisClient:     redisClient,
 		kbShareService:  kbShareService,
 		imageResolver:   imageResolver,

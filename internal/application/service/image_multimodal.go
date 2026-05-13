@@ -81,6 +81,7 @@ type ImageMultimodalService struct {
 	knowledgeRepo  interfaces.KnowledgeRepository
 	tenantRepo     interfaces.TenantRepository
 	retrieveEngine interfaces.RetrieveEngineRegistry
+	ownership      retriever.TenantStoreOwnership
 	ollamaService  *ollama.OllamaService
 	taskEnqueuer   interfaces.TaskEnqueuer
 	redisClient    *redis.Client
@@ -99,6 +100,7 @@ func NewImageMultimodalService(
 	knowledgeRepo interfaces.KnowledgeRepository,
 	tenantRepo interfaces.TenantRepository,
 	retrieveEngine interfaces.RetrieveEngineRegistry,
+	ownership retriever.TenantStoreOwnership,
 	ollamaService *ollama.OllamaService,
 	taskEnqueuer interfaces.TaskEnqueuer,
 	redisClient *redis.Client,
@@ -111,6 +113,7 @@ func NewImageMultimodalService(
 		knowledgeRepo:  knowledgeRepo,
 		tenantRepo:     tenantRepo,
 		retrieveEngine: retrieveEngine,
+		ownership:      ownership,
 		ollamaService:  ollamaService,
 		taskEnqueuer:   taskEnqueuer,
 		redisClient:    redisClient,
@@ -290,8 +293,13 @@ func (s *ImageMultimodalService) indexChunks(ctx context.Context, payload types.
 		logger.Warnf(ctx, "[ImageMultimodal] Failed to get tenant for indexing: %v", err)
 		return
 	}
+	// The factory's unbound path reads TenantInfo from ctx; make sure it's there.
+	ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenantInfo)
 
-	engine, err := retriever.NewCompositeRetrieveEngine(s.retrieveEngine, tenantInfo.GetEffectiveEngines())
+	// Resolve engine via the factory using the KB's VectorStore binding
+	// (nil → tenant effective engines fallback; verified tenant ownership otherwise).
+	engine, err := retriever.CreateRetrieveEngineForKB(
+		ctx, s.retrieveEngine, s.ownership, payload.TenantID, kb.VectorStoreID)
 	if err != nil {
 		logger.Warnf(ctx, "[ImageMultimodal] Failed to init retrieve engine: %v", err)
 		return
