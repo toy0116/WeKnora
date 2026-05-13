@@ -1959,6 +1959,25 @@ loop:
 		answer = "抱歉，我暂时无法回答这个问题。"
 	}
 
+	// Overflow-segment fallback for IM platforms with strict per-message
+	// display caps (notably WeCom — measured empirically at ~746 visible
+	// characters; session 50e8531f cut after Priva's pitch in an 11,784-
+	// char reply). When the full answer overflows that budget, the stream
+	// bubble in the chat shows only the first segment; we send the
+	// remaining segments as separate follow-up messages so the user
+	// actually receives the whole answer.
+	//
+	// Only kicks in for platforms that we know have a hard display cap.
+	// Other platforms keep the existing single-stream behavior so we
+	// don't introduce gratuitous segmentation where the platform handles
+	// long messages fine.
+	if budget := overflowBudgetFor(string(msg.Platform)); budget > 0 {
+		segments := SplitLongReply(answer, budget)
+		if len(segments) > 1 {
+			s.sendOverflowSegments(ctx, msg, streamer, segments)
+		}
+	}
+
 	assistantMsg.Content = answer
 	assistantMsg.IsCompleted = true
 	if err := s.messageService.UpdateMessage(ctx, assistantMsg); err != nil {
@@ -1967,6 +1986,57 @@ loop:
 
 	logger.Infof(ctx, "[IM] Stream reply sent: platform=%s user=%s answer_len=%d", msg.Platform, msg.UserID, len(answer))
 	return nil
+}
+
+// overflowBudgetFor returns the per-message rune-count budget under which a
+// platform's chat UI will reliably render the full segment. Zero means "no
+// known cap — don't split". WeCom is the one painful case at the moment;
+// other platforms (Feishu, DingTalk, Discord, …) handle long messages fine
+// natively or via the platform's own chunking and don't need this.
+func overflowBudgetFor(platform string) int {
+	switch platform {
+	case string(PlatformWeCom), string(PlatformWeChat):
+		// Empirical: WeCom Smart Bot stream message displays ~746 chars
+		// before the chat UI hard-truncates (measured on session
+		// 50e8531f). 600 leaves ~140-char headroom for the [N/M]\n\n
+		// prefix and any safety margin.
+		return 600
+	default:
+		return 0
+	}
+}
+
+// sendOverflowSegments sends segments[1..] as follow-up IM replies after the
+// initial stream finished. Each follow-up gets a `[N/M]` prefix so the user
+// can read them in order. Segment 1 is intentionally NOT re-sent: it was
+// already streamed (and is what the chat UI displayed, possibly truncated).
+//
+// Each call uses streamer.SendReply, which under the WeCom long-conn
+// protocol creates a new stream_id with finish=true — i.e. a fresh chat
+// bubble per segment. Failures on individual segments are logged but do
+// not abort the rest of the sequence; the user is better off seeing
+// segments 2,3,4 than seeing 2 and giving up because 5 failed.
+func (s *Service) sendOverflowSegments(
+	ctx context.Context, msg *IncomingMessage, streamer StreamSender, segments []string,
+) {
+	total := len(segments)
+	logger.Infof(ctx, "[IM] Overflow segments: sending %d follow-up parts (platform=%s user=%s)",
+		total-1, msg.Platform, msg.UserID)
+	for i := 1; i < total; i++ {
+		content := fmt.Sprintf("[%d/%d]\n\n%s", i+1, total, segments[i])
+		streamID, err := streamer.StartStream(ctx, msg)
+		if err != nil {
+			logger.Warnf(ctx, "[IM] Overflow segment %d/%d: StartStream failed: %v", i+1, total, err)
+			continue
+		}
+		if err := streamer.SendStreamChunk(ctx, msg, streamID, content); err != nil {
+			logger.Warnf(ctx, "[IM] Overflow segment %d/%d: SendStreamChunk failed: %v", i+1, total, err)
+			continue
+		}
+		if err := streamer.EndStream(ctx, msg, streamID); err != nil {
+			logger.Warnf(ctx, "[IM] Overflow segment %d/%d: EndStream failed: %v", i+1, total, err)
+		}
+	}
 }
 
 // fallbackNonStream is used when streaming initialization fails.
