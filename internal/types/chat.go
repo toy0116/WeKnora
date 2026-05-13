@@ -27,11 +27,11 @@ type FunctionCall struct {
 
 // ChatResponse chat response
 type ChatResponse struct {
-	Content         string        `json:"content"`
-	ThinkingContent string        `json:"thinking_content,omitempty"` // 思考内容，供下一轮以 reasoning_content 回传给支持的模型
-	ToolCalls       []LLMToolCall `json:"tool_calls,omitempty"`
-	FinishReason    string        `json:"finish_reason,omitempty"`
-	Usage           TokenUsage    `json:"usage"`
+	Content          string        `json:"content"`
+	ReasoningContent string        `json:"reasoning_content,omitempty"` // 思考内容，供下一轮回传给支持的模型（MiMo / DeepSeek thinking 等）
+	ToolCalls        []LLMToolCall `json:"tool_calls,omitempty"`
+	FinishReason     string        `json:"finish_reason,omitempty"`
+	Usage            TokenUsage    `json:"usage"`
 }
 
 // Response type

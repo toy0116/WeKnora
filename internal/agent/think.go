@@ -16,7 +16,7 @@ import (
 // streamLLMResult holds accumulated output from a streaming LLM call.
 type streamLLMResult struct {
 	Content         string
-	ThinkingContent string // accumulated thinking/reasoning content, kept separate from answer
+	ReasoningContent string // accumulated thinking/reasoning content, kept separate from answer
 	ToolCalls       []types.LLMToolCall
 	Usage           *types.TokenUsage
 	FinishReason    string // actual finish_reason from LLM (captured from last stream chunk)
@@ -66,7 +66,7 @@ func (e *AgentEngine) streamLLMToEventBus(
 			isExtracted := chunk.Data != nil && chunk.Data["source"] != nil
 			if !isExtracted {
 				if chunk.ResponseType == types.ResponseTypeThinking {
-					result.ThinkingContent += chunk.Content
+					result.ReasoningContent += chunk.Content
 				} else {
 					result.Content += chunk.Content
 				}
@@ -240,7 +240,7 @@ func (e *AgentEngine) streamThinkingToEventBus(
 
 	resp := &types.ChatResponse{
 		Content:         fullContent,
-		ThinkingContent: llmResult.ThinkingContent, // 保留思考内容，供下一轮以 reasoning_content 回传给 MiMo 等模型
+		ReasoningContent: llmResult.ReasoningContent, // 保留思考内容，供下一轮以 reasoning_content 回传给 MiMo 等模型
 		ToolCalls:       llmResult.ToolCalls,
 		FinishReason:    finishReason,
 	}

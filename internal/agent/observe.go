@@ -460,7 +460,7 @@ func (e *AgentEngine) appendToolResults(
 		assistantMsg := chat.Message{
 			Role:             "assistant",
 			Content:          step.Thought,
-			ReasoningContent: step.ThinkingContent, // 回传 reasoning_content，MiMo 等思考模型多轮时需要
+			ReasoningContent: step.ReasoningContent, // 回传给 MiMo / DeepSeek thinking 等模型，多轮时需要
 		}
 
 		// Add tool calls to assistant message (following OpenAI format)

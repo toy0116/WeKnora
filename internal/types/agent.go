@@ -200,11 +200,16 @@ type ToolCall struct {
 
 // AgentStep represents one iteration of the ReAct loop
 type AgentStep struct {
-	Iteration       int        `json:"iteration"`                  // Iteration number (0-indexed)
-	Thought         string     `json:"thought"`                    // LLM's reasoning/thinking (Think phase)
-	ThinkingContent string     `json:"thinking_content,omitempty"` // 原始思考内容（reasoning_content），MiMo 等模型多轮时需回传
-	ToolCalls       []ToolCall `json:"tool_calls"`                 // Tools called in this step (Act phase)
-	Timestamp       time.Time  `json:"timestamp"`                  // When this step occurred
+	Iteration int    `json:"iteration"` // Iteration number (0-indexed)
+	Thought   string `json:"thought"`   // LLM's reasoning/thinking summary visible to the user
+	// ReasoningContent is the raw reasoning_content the LLM emitted. MiMo /
+	// DeepSeek V3.2+ thinking-mode reject multi-turn requests where prior
+	// assistant messages lack this field. JSON tag stays "thinking_content"
+	// (legacy from the original 73cbfc35 fix) so AgentStep records persisted
+	// before this rename keep deserialising correctly.
+	ReasoningContent string     `json:"thinking_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls"` // Tools called in this step (Act phase)
+	Timestamp        time.Time  `json:"timestamp"`  // When this step occurred
 }
 
 // GetObservations returns observations from all tool calls in this step

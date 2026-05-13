@@ -81,10 +81,8 @@ type RemoteAPIChat struct {
 	customHeaders map[string]string
 
 	// requestCustomizer 允许子类自定义请求
-	// originalMsgs 为调用前的原始 chat.Message 切片，包含 ReasoningContent 等字段，
-	// 供需要回传 reasoning_content 的 provider（如 MiMo）直接使用。
 	// 返回自定义请求体（如果为 nil 则使用标准请求）和是否需要使用原始 HTTP 请求
-	requestCustomizer func(req *openai.ChatCompletionRequest, originalMsgs []Message, opts *ChatOptions, isStream bool) (customReq any, useRawHTTP bool)
+	requestCustomizer func(req *openai.ChatCompletionRequest, opts *ChatOptions, isStream bool) (customReq any, useRawHTTP bool)
 
 	// endpointCustomizer 允许子类自定义请求的 endpoint
 	// 返回是否使用自定义请求地址, 返回空则使用默认OpenAI格式地址
@@ -166,7 +164,7 @@ func NewRemoteAPIChat(chatConfig *ChatConfig) (*RemoteAPIChat, error) {
 }
 
 // SetRequestCustomizer 设置请求自定义器
-func (c *RemoteAPIChat) SetRequestCustomizer(customizer func(req *openai.ChatCompletionRequest, originalMsgs []Message, opts *ChatOptions, isStream bool) (any, bool)) {
+func (c *RemoteAPIChat) SetRequestCustomizer(customizer func(req *openai.ChatCompletionRequest, opts *ChatOptions, isStream bool) (any, bool)) {
 	c.requestCustomizer = customizer
 }
 
@@ -251,6 +249,19 @@ func (c *RemoteAPIChat) ConvertMessages(messages []Message) []openai.ChatComplet
 			openaiMsg.Name = msg.Name
 		}
 
+		// Round-trip reasoning_content on assistant turns. MiMo and DeepSeek
+		// V3.2+ thinking-mode reject multi-turn requests where the prior
+		// assistant message lacks its reasoning_content with HTTP 400
+		// ("The reasoning_content in the thinking mode must be passed back
+		// to the API."). go-openai's openai.ChatCompletionMessage.ReasoningContent
+		// serialises into the wire as `reasoning_content`; providers that
+		// don't recognize the field ignore it harmlessly. This replaces the
+		// old MiMo-specific raw-HTTP customizer with the standard library
+		// path — see commit log around the refactor for details.
+		if msg.Role == "assistant" && msg.ReasoningContent != "" {
+			openaiMsg.ReasoningContent = msg.ReasoningContent
+		}
+
 		openaiMessages = append(openaiMessages, openaiMsg)
 	}
 	return openaiMessages
@@ -258,6 +269,14 @@ func (c *RemoteAPIChat) ConvertMessages(messages []Message) []openai.ChatComplet
 
 // BuildChatCompletionRequest 构建标准聊天请求参数（导出供子类使用）
 func (c *RemoteAPIChat) BuildChatCompletionRequest(messages []Message, opts *ChatOptions, isStream bool) openai.ChatCompletionRequest {
+	// Provider-specific message sanitization. For MiMo this drops legacy
+	// assistant→tool message groups that lack reasoning_content (pre-73cbfc35
+	// sessions); the MiMo API would otherwise reject the entire request
+	// with HTTP 400. No-op for other providers.
+	if c.provider == provider.ProviderMimo {
+		messages = sanitizeMimoMessages(messages)
+	}
+
 	req := openai.ChatCompletionRequest{
 		Model:    c.modelName,
 		Messages: c.ConvertMessages(messages),
@@ -378,9 +397,9 @@ func (c *RemoteAPIChat) Chat(ctx context.Context, messages []Message, opts *Chat
 	if c.endpointCustomizer != nil {
 		customEndpoint = c.endpointCustomizer(c.baseURL, c.modelID, true)
 	}
-	// 检查是否需要自定义请求（传入原始 messages，供需要 reasoning_content 的 provider 读取）
+	// 检查是否需要自定义请求
 	if c.requestCustomizer != nil {
-		customReq, useRawHTTP := c.requestCustomizer(&req, messages, opts, false)
+		customReq, useRawHTTP := c.requestCustomizer(&req, opts, false)
 		if useRawHTTP && customReq != nil {
 			return c.chatWithRawHTTP(timeoutCtx, customEndpoint, customReq)
 		}
@@ -552,9 +571,9 @@ func (c *RemoteAPIChat) ChatStream(ctx context.Context, messages []Message, opts
 		customEndpoint = c.endpointCustomizer(c.baseURL, c.modelID, true)
 	}
 
-	// 检查是否需要自定义请求（传入原始 messages，供需要 reasoning_content 的 provider 读取）
+	// 检查是否需要自定义请求
 	if c.requestCustomizer != nil {
-		customReq, useRawHTTP := c.requestCustomizer(&req, messages, opts, true)
+		customReq, useRawHTTP := c.requestCustomizer(&req, opts, true)
 		if useRawHTTP && customReq != nil {
 			ch, err := c.chatStreamWithRawHTTP(timeoutCtx, customEndpoint, customReq)
 			return wrapStreamCancel(ch, err, cancel)

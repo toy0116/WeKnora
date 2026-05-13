@@ -20,9 +20,7 @@ type ProviderSpec struct {
 	// Used for sub-provider routing (e.g. Qwen3 within Aliyun).
 	ModelMatcher func(modelName string) bool
 	// RequestCustomizer: provider-specific request modification.
-	// originalMsgs 是调用时的原始 chat.Message 切片，包含 ReasoningContent 等字段，
-	// 供需要回传 reasoning_content 的 provider（如 MiMo）直接读取。
-	RequestCustomizer func(req *openai.ChatCompletionRequest, originalMsgs []Message, opts *ChatOptions, isStream bool) (any, bool)
+	RequestCustomizer func(req *openai.ChatCompletionRequest, opts *ChatOptions, isStream bool) (any, bool)
 	// EndpointCustomizer: provider-specific endpoint URL override.
 	EndpointCustomizer func(baseURL string, modelID string, isStream bool) string
 	// HeaderCustomizer: provider-specific raw HTTP header customization.
@@ -72,11 +70,11 @@ var chatProviderSpecs = []ProviderSpec{
 		Provider:          provider.ProviderNvidia,
 		RequestCustomizer: genericRequestCustomizer,
 	},
-	// Mimo (小米 MiMo) — 思考模式多轮时须回传 reasoning_content
-	{
-		Provider:          provider.ProviderMimo,
-		RequestCustomizer: mimoRequestCustomizer,
-	},
+	// Note: MiMo (小米) doesn't need a per-request customizer — its
+	// reasoning_content round-trip is handled by ConvertMessages, and its
+	// legacy-session compatibility is handled by sanitizeMimoMessages
+	// (called from BuildChatCompletionRequest). See chat_provider_spec.go
+	// "MiMo compatibility helpers" section below for context.
 }
 
 // findProviderSpec finds the matching spec for the given provider and model name.
@@ -120,7 +118,7 @@ type ThinkingChatCompletionRequest struct {
 // WeKnoraCloud 走 OpenAI 兼容格式，除了 MultiContent 需要降级为纯文本 Content 之外，
 // 其他字段（tools / tool_choice / parallel_tool_calls / response_format / stream_options 等）直接透传，
 // 以保证 function calling 等能力可用。
-func weKnoraCloudRequestCustomizer(req *openai.ChatCompletionRequest, _ []Message, _ *ChatOptions, isStream bool) (any, bool) {
+func weKnoraCloudRequestCustomizer(req *openai.ChatCompletionRequest, _ *ChatOptions, isStream bool) (any, bool) {
 	cloudReq := *req
 	cloudReq.Stream = isStream
 	cloudReq.Messages = convertToWeKnoraCloudMessagesFromOpenAI(req.Messages)
@@ -159,7 +157,7 @@ func convertToWeKnoraCloudMessagesFromOpenAI(messages []openai.ChatCompletionMes
 
 // qwenThinkingRequestCustomizer 自定义 Qwen 系列（阿里云）模型的思考请求
 func qwenThinkingRequestCustomizer(
-	req *openai.ChatCompletionRequest, _ []Message, opts *ChatOptions, isStream bool,
+	req *openai.ChatCompletionRequest, opts *ChatOptions, isStream bool,
 ) (any, bool) {
 	if !isStream {
 		// Qwen3 模型在非流式请求时需要显式禁用 thinking
@@ -189,7 +187,7 @@ func qwenThinkingRequestCustomizer(
 // 仅对 DeepSeek V3.x 系列模型设置 thinking 参数；R1 系列默认开启思维链
 // 参考：https://cloud.tencent.com/document/product/1772/115963
 func lkeapRequestCustomizer(
-	req *openai.ChatCompletionRequest, _ []Message, opts *ChatOptions, _ bool,
+	req *openai.ChatCompletionRequest, opts *ChatOptions, _ bool,
 ) (any, bool) {
 	modelName := req.Model
 	if !strings.Contains(strings.ToLower(modelName), "deepseek-v3") || opts == nil || opts.Thinking == nil {
@@ -212,7 +210,7 @@ func lkeapRequestCustomizer(
 // deepseekRequestCustomizer 自定义 DeepSeek 请求
 // DeepSeek 模型不支持 tool_choice 参数，需要清除
 func deepseekRequestCustomizer(
-	req *openai.ChatCompletionRequest, _ []Message, opts *ChatOptions, _ bool,
+	req *openai.ChatCompletionRequest, opts *ChatOptions, _ bool,
 ) (any, bool) {
 	if opts != nil && opts.ToolChoice != "" {
 		logger.Infof(context.Background(), "deepseek model, skip tool_choice")
@@ -224,7 +222,7 @@ func deepseekRequestCustomizer(
 // genericRequestCustomizer 自定义 Generic 请求
 // Generic provider（如 vLLM）使用 ChatTemplateKwargs 传递 thinking 参数
 func genericRequestCustomizer(
-	req *openai.ChatCompletionRequest, _ []Message, opts *ChatOptions, _ bool,
+	req *openai.ChatCompletionRequest, opts *ChatOptions, _ bool,
 ) (any, bool) {
 	thinking := false
 	if opts != nil && opts.Thinking != nil {
@@ -239,7 +237,7 @@ func genericRequestCustomizer(
 // volcengineRequestCustomizer 自定义火山引擎请求
 // 火山引擎使用 thinking 参数控制深度思考，格式同 LKEAP: { "type": "enabled"/"disabled" }
 func volcengineRequestCustomizer(
-	req *openai.ChatCompletionRequest, _ []Message, opts *ChatOptions, _ bool,
+	req *openai.ChatCompletionRequest, opts *ChatOptions, _ bool,
 ) (any, bool) {
 	if opts == nil || opts.Thinking == nil {
 		return nil, false
@@ -258,41 +256,29 @@ func volcengineRequestCustomizer(
 	return vcReq, true
 }
 
-// --- MiMo (小米) ---
-
-// mimoMessage 是 MiMo API 的消息格式，支持 reasoning_content 字段。
-// MiMo 思考模式多轮对话中，assistant 消息包含工具调用时，
-// 必须回传 reasoning_content，否则 API 返回 400。
-// 参见: https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/passing-back-reasoning_content
-type mimoMessage struct {
-	Role             string          `json:"role"`
-	Content          string          `json:"content,omitempty"`
-	ToolCalls        []openai.ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string          `json:"tool_call_id,omitempty"`
-	Name             string          `json:"name,omitempty"`
-	ReasoningContent string          `json:"reasoning_content,omitempty"`
-}
-
-// mimoChatCompletionRequest 是 MiMo 的完整请求结构体，
-// 直接使用 mimoMessage 以保留 reasoning_content。
-type mimoChatCompletionRequest struct {
-	Model         string              `json:"model"`
-	Messages      []mimoMessage       `json:"messages"`
-	Stream        bool                `json:"stream"`
-	Temperature   float32             `json:"temperature,omitempty"`
-	MaxTokens     int                 `json:"max_tokens,omitempty"`
-	Tools         []openai.Tool       `json:"tools,omitempty"`
-	ToolChoice    any                 `json:"tool_choice,omitempty"`
-	StreamOptions *openai.StreamOptions `json:"stream_options,omitempty"`
-}
-
-// sanitizeMimoMessages removes assistant→tool-result pairs where the assistant
-// message contains tool_calls but no reasoning_content.
+// --- MiMo (小米) compatibility helpers ---
 //
-// Background: MiMo thinking-mode API requires that every assistant message
-// carrying tool_calls also includes reasoning_content. Historical messages
-// stored before the ReasoningContent fix don't have that field, so we drop
-// the entire call+result group to avoid HTTP 400 from the MiMo API.
+// MiMo's thinking-mode multi-turn API requires that every assistant message
+// carrying tool_calls also includes its reasoning_content; otherwise the API
+// rejects the request with HTTP 400. The forward path is handled by
+// remote_api.go.ConvertMessages, which forwards msg.ReasoningContent into
+// the standard openai.ChatCompletionMessage.ReasoningContent field
+// (go-openai v1.40+ supports it natively, so we don't need a MiMo-specific
+// request struct or raw-HTTP customizer anymore).
+//
+// The legacy-session sanitizer below stays — it drops orphan
+// assistant→tool_call groups where the assistant message lacks
+// reasoning_content (sessions started before 73cbfc35 have no
+// reasoning_content stored on disk). Without this, those sessions would
+// keep 400-ing until the user manually started a new conversation.
+//
+// Reference: https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/passing-back-reasoning_content
+
+// sanitizeMimoMessages drops assistant→tool message groups where the
+// assistant message contains tool_calls but no ReasoningContent. Called by
+// remote_api.go.BuildChatCompletionRequest immediately before ConvertMessages
+// when the provider is MiMo. No-op on the fast path when no offending
+// messages exist.
 func sanitizeMimoMessages(msgs []Message) []Message {
 	// Collect tool-call IDs from problematic assistant messages.
 	badCallIDs := map[string]bool{}
@@ -325,53 +311,4 @@ func sanitizeMimoMessages(msgs []Message) []Message {
 		}
 	}
 	return result
-}
-
-// mimoRequestCustomizer 为 MiMo 构建请求，从 originalMsgs 读取 ReasoningContent，
-// 在 assistant 消息中回传 reasoning_content 字段，避免 API 返回 400。
-func mimoRequestCustomizer(
-	req *openai.ChatCompletionRequest, originalMsgs []Message, _ *ChatOptions, isStream bool,
-) (any, bool) {
-	mimoReq := mimoChatCompletionRequest{
-		Model:         req.Model,
-		Stream:        isStream,
-		Temperature:   req.Temperature,
-		MaxTokens:     req.MaxTokens,
-		Tools:         req.Tools,
-		StreamOptions: req.StreamOptions,
-	}
-	if req.ToolChoice != nil {
-		mimoReq.ToolChoice = req.ToolChoice
-	}
-
-	// Drop historical tool_call groups that lack reasoning_content.
-	sanitized := sanitizeMimoMessages(originalMsgs)
-
-	msgs := make([]mimoMessage, 0, len(sanitized))
-	for _, m := range sanitized {
-		mm := mimoMessage{
-			Role:             m.Role,
-			Content:          m.Content,
-			ToolCallID:       m.ToolCallID,
-			Name:             m.Name,
-			ReasoningContent: m.ReasoningContent,
-		}
-		if len(m.ToolCalls) > 0 {
-			mm.ToolCalls = make([]openai.ToolCall, 0, len(m.ToolCalls))
-			for _, tc := range m.ToolCalls {
-				mm.ToolCalls = append(mm.ToolCalls, openai.ToolCall{
-					ID:   tc.ID,
-					Type: openai.ToolType(tc.Type),
-					Function: openai.FunctionCall{
-						Name:      tc.Function.Name,
-						Arguments: tc.Function.Arguments,
-					},
-				})
-			}
-		}
-		msgs = append(msgs, mm)
-	}
-	mimoReq.Messages = msgs
-
-	return mimoReq, true
 }
