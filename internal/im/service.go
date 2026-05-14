@@ -2217,7 +2217,14 @@ func overflowBudgetFor(platform string) int {
 				return n
 			}
 		}
-		return 2000
+		// Default raised from 2000 → 5000 after user test of session
+		// f1dfa510 where a 5382-rune spec-sheet answer split into 4
+		// bubbles at budget 2000. The 5000 default lets most realistic
+		// IM answers stay single-bubble; truly long ones (>5K runes,
+		// ~7% of historical traffic) still get multi-bubble. Operators
+		// can dial down via WEKNORA_IM_FRAME_BUDGET=2000 if WeCom's
+		// actual single-frame render limit is observed to be lower.
+		return 5000
 	default:
 		return 0
 	}

@@ -7,6 +7,77 @@ import (
 	"unicode/utf8"
 )
 
+// ── Bug regression: multi-section spec sheet (table not dominant) ───────
+
+// TestSplitLongReply_MultiSectionSpecSheetAvoidsTableAwarePath reproduces
+// the f1dfa510 R1520LG spec-sheet bug: an answer with structure
+//
+//	# Title
+//	intro paragraph
+//	---
+//	## Section 1
+//	| param | value |   ← tiny 3-row table
+//	|-------|-------|
+//	| CPU   | xxx   |
+//	(more sections + bullets + citations)
+//
+// The first detected table was just the "硬件系统" 3-row mini-table
+// (~150 runes out of 5382 total). The table-aware path then put the tiny
+// table in segment 1 with the rest as trailer (split by paragraphs) —
+// producing an unbalanced "first bubble tiny + rest" outcome.
+//
+// Fix: when the dominant first table is < 30% of total content, fall back
+// to block-based splitting, which gives evenly-sized segments.
+func TestSplitLongReply_MultiSectionSpecSheetAvoidsTableAwarePath(t *testing.T) {
+	// Build a spec-sheet-shaped answer: tiny first table, lots of prose
+	// + smaller tables in trailing sections.
+	var b strings.Builder
+	b.WriteString("# R1520LG 工业 LoRaWAN 网关 — 规格\n\n")
+	b.WriteString(strings.Repeat("它是 Robustel 推出的高性价比工业级 LoRaWAN 网关。", 5)) // intro
+	b.WriteString("\n\n---\n\n## 🔧 硬件系统\n\n")
+	b.WriteString("| 参数 | 规格 |\n|------|------|\n| CPU | i.MX 6ULL, 792 MHz |\n| RAM | 512 MB |\n| Flash | 8 GB |\n\n")
+	// Now write 8 more sections of prose (each ~500 runes) — the bulk
+	// of the answer. No more tables for simplicity.
+	for i := 0; i < 8; i++ {
+		b.WriteString("## 章节 " + itoa(i+1) + "\n\n")
+		b.WriteString(strings.Repeat("规格说明详情 spec details paragraph content. ", 20))
+		b.WriteString("\n\n")
+	}
+	content := b.String()
+	totalRunes := utf8.RuneCountInString(content)
+	if totalRunes < 4000 {
+		t.Fatalf("test fixture is too small to exercise multi-section split (got %d runes)", totalRunes)
+	}
+
+	segs := SplitLongReply(content, 2000)
+	if len(segs) < 2 {
+		t.Fatalf("expected multi-segment for >4000-rune answer at budget 2000, got %d", len(segs))
+	}
+
+	// Critical assertion: segment 1 must contain prose, not just the title
+	// and the tiny 3-row table.
+	first := segs[0]
+	firstRunes := utf8.RuneCountInString(first)
+	if firstRunes < 800 {
+		t.Errorf("first segment too small (%d runes) — table-aware misfire regressed:\n%s",
+			firstRunes, first)
+	}
+
+	// Sanity: segment sizes should be roughly balanced (each within
+	// ±50% of average) — not a tiny segment + N big ones.
+	avg := totalRunes / len(segs)
+	for i, s := range segs {
+		r := utf8.RuneCountInString(s)
+		// Allow last segment to be smaller (natural remainder).
+		if i == len(segs)-1 {
+			continue
+		}
+		if r < avg/2 {
+			t.Errorf("segment %d significantly smaller than average (%d vs avg %d) — unbalanced split", i+1, r, avg)
+		}
+	}
+}
+
 // ── Bug #1 regression: first segment must have ≥1 row even with a long
 // preamble ─────────────────────────────────────────────────────────────
 
@@ -76,14 +147,16 @@ func TestSegmentDelayInterval_EnvOverride(t *testing.T) {
 // ── Hybrid compact-mode delivery (single bubble when short, multi-bubble
 // when long) ───────────────────────────────────────────────────────────
 
-func TestOverflowBudgetFor_DefaultIsTwoThousandForWeComAndWeChat(t *testing.T) {
-	// Make sure the env var doesn't leak from a prior test.
+func TestOverflowBudgetFor_DefaultBudgetIsFiveThousandForWeComAndWeChat(t *testing.T) {
+	// Default raised after f1dfa510 spec-sheet test split a 5382-rune
+	// answer into 4 bubbles at the prior 2000 budget. 5000 keeps most
+	// realistic answers in a single bubble.
 	t.Setenv("WEKNORA_IM_FRAME_BUDGET", "")
-	if got := overflowBudgetFor("wecom"); got != 2000 {
-		t.Errorf("wecom default budget: want 2000, got %d", got)
+	if got := overflowBudgetFor("wecom"); got != 5000 {
+		t.Errorf("wecom default budget: want 5000, got %d", got)
 	}
-	if got := overflowBudgetFor("wechat"); got != 2000 {
-		t.Errorf("wechat default budget: want 2000, got %d", got)
+	if got := overflowBudgetFor("wechat"); got != 5000 {
+		t.Errorf("wechat default budget: want 5000, got %d", got)
 	}
 }
 
@@ -97,12 +170,12 @@ func TestOverflowBudgetFor_EnvOverride(t *testing.T) {
 	// Garbage value → fall back to default (not zero), so a typo doesn't
 	// silently kill the splitter entirely.
 	t.Setenv("WEKNORA_IM_FRAME_BUDGET", "not-a-number")
-	if got := overflowBudgetFor("wecom"); got != 2000 {
+	if got := overflowBudgetFor("wecom"); got != 5000 {
 		t.Errorf("non-numeric env should fall back to default, got %d", got)
 	}
 	// Zero / negative also fall back — those would degenerate the splitter.
 	t.Setenv("WEKNORA_IM_FRAME_BUDGET", "0")
-	if got := overflowBudgetFor("wecom"); got != 2000 {
+	if got := overflowBudgetFor("wecom"); got != 5000 {
 		t.Errorf("zero env should fall back to default, got %d", got)
 	}
 }

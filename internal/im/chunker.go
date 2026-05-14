@@ -107,6 +107,27 @@ func splitTableAware(content string, runeBudget int) ([]string, bool) {
 	dataRows := lines[dataStartIdx:dataEndIdx]
 	trailer := strings.Join(lines[dataEndIdx:], "\n")
 
+	// Multi-section answers (e.g. spec sheets with one tiny table per
+	// section + multiple <kb ... /> citations + bullet summaries) DON'T
+	// belong on the table-aware path. Detection: if the first detected
+	// table's body is small relative to the whole answer, the table isn't
+	// the dominant content — splitByBlocks gives more balanced segments.
+	//
+	// Reproducer that motivated this guard: f1dfa510 R1520LG spec query.
+	// Full answer 5382 runes, but first table ("硬件系统") had 3 data rows
+	// (~150 runes) — the rest was 9 other sections + citations + bullets,
+	// which got piled into "trailer". Table-aware path then produced an
+	// unbalanced split with segment 1 = preamble + tiny table + 0 rows
+	// (special-case packing) while trailer was sliced by splitByBlocks
+	// into the remaining N-1 segments.
+	//
+	// Threshold: table body < 30% of total runes → not table-dominant.
+	tableRunes := utf8.RuneCountInString(strings.Join(dataRows, "\n"))
+	totalRunes := utf8.RuneCountInString(content)
+	if tableRunes*100/maxInt(totalRunes, 1) < 30 {
+		return nil, false
+	}
+
 	headerBlock := header + "\n" + separator + "\n"
 
 	var segments []string
@@ -302,6 +323,16 @@ func splitOversizedLine(line string, runeBudget int) []string {
 		start = cut
 	}
 	return out
+}
+
+// maxInt returns the larger of a, b. Local helper to avoid importing
+// "math" in this small file. The standard `max` builtin (Go 1.21+) is
+// fine but pre-1.21 deployments still build cleanly with this.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // isTableRow returns true when the trimmed line looks like a GFM table row:
