@@ -672,6 +672,18 @@ func (s *Service) releaseWSLeader(channelID string) {
 
 // wsLeaderRenewLoop periodically refreshes the leader lock TTL.
 // Stops when ctx is cancelled (channel stopped) or if the lock is lost.
+//
+// On lock loss, the renewal loop hands control back to the *retry* loop so
+// the channel can be re-acquired automatically. The lock-loss path matters
+// for laptop deployments specifically: when the host sleeps long enough
+// (e.g. an 8-hour overnight closed-lid), the Go runtime is paused, the
+// renewal ticker stops firing, and the Redis TTL on RedisKeyLeader+channelID
+// (currently 15s) elapses. On wake, the first renew tick finds the key gone
+// → result==0 → "lost leadership". Without a retry path, the channel stays
+// dead until the WeKnora process restarts. Calling wsLeaderRetryLoop here
+// keeps the retry cadence going forever; whichever side (this instance or
+// a competing one in multi-instance mode) sets the key next gets to drive
+// the adapter.
 func (s *Service) wsLeaderRenewLoop(ctx context.Context, channelID string) {
 	key := RedisKeyLeader + channelID
 	ticker := time.NewTicker(wsLeaderRenewInterval)
@@ -691,8 +703,30 @@ func (s *Service) wsLeaderRenewLoop(ctx context.Context, channelID string) {
 			result, err := script.Run(ctx, s.redis, []string{key}, s.instanceID, wsLeaderTTL.Milliseconds()).Int64()
 			if err != nil || result == 0 {
 				logger.Warnf(context.Background(),
-					"[IM] Lost leadership for channel %s, stopping adapter", channelID)
+					"[IM] Lost leadership for channel %s (err=%v lua_result=%d), stopping adapter and restarting retry loop",
+					channelID, err, result)
+
+				// Capture the channel struct BEFORE StopChannel deletes it
+				// from s.channels — we need the *IMChannel pointer to hand
+				// to the retry loop so it can re-register the adapter when
+				// it acquires the lock again.
+				s.mu.RLock()
+				var ch *IMChannel
+				if cs, ok := s.channels[channelID]; ok {
+					ch = cs.Channel
+				}
+				s.mu.RUnlock()
+
 				s.StopChannel(channelID)
+
+				// Re-enter the retry path so we keep trying to take the lock
+				// back. In single-instance deployments this re-acquires on
+				// the next 10s tick (wsLeaderRetryInterval). In multi-instance
+				// mode it backs off until whoever currently holds the lock
+				// releases it / their TTL expires.
+				if ch != nil {
+					go s.wsLeaderRetryLoop(ch)
+				}
 				return
 			}
 		case <-ctx.Done():
