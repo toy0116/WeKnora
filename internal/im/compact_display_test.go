@@ -3,8 +3,75 @@ package im
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
+
+// ── Bug #1 regression: first segment must have ≥1 row even with a long
+// preamble ─────────────────────────────────────────────────────────────
+
+func TestSplitLongReply_FirstSegmentHasAtLeastOneRowEvenWithLongPreamble(t *testing.T) {
+	// Reproduces the f1dfa510 session bug: 4392-rune answer with a sizeable
+	// markdown table prefaced by an intro paragraph. The old condition
+	// `first.Len() > headerBudget` (bytes-vs-runes mix) caused the first
+	// segment to bail out before adding any row when even the first row
+	// would push the candidate over budget — so segment 1 was preamble+
+	// header only ("特别短") while segments 2..N had multiple rows each.
+	preamble := strings.Repeat("这是一段说明文本 with context to set up. ", 30) // ~1200 runes
+	header := "| 公司 | Pitch |"
+	separator := "|----|-------|"
+	rows := []string{
+		"| A | " + strings.Repeat("p", 1500) + " |", // huge row that alone overflows
+		"| B | " + strings.Repeat("p", 1500) + " |",
+		"| C | " + strings.Repeat("p", 1500) + " |",
+	}
+	content := preamble + "\n\n" + header + "\n" + separator + "\n" + strings.Join(rows, "\n")
+	segs := SplitLongReply(content, 2000)
+
+	if len(segs) < 2 {
+		t.Fatalf("expected multi-segment split, got %d", len(segs))
+	}
+	// First segment must contain row A's distinguishing content, not just
+	// preamble + header.
+	if !strings.Contains(segs[0], "| A |") {
+		t.Errorf("first segment missing row A — packing bug regressed:\n%s", segs[0])
+	}
+	// Sanity: all rows are present somewhere.
+	joined := strings.Join(segs, "\n")
+	for _, label := range []string{"| A |", "| B |", "| C |"} {
+		if !strings.Contains(joined, label) {
+			t.Errorf("row %q lost across segments", label)
+		}
+	}
+}
+
+// ── Bug #2 regression: inter-segment delay configurable ─────────────────
+
+func TestSegmentDelayInterval_DefaultIsOneSecond(t *testing.T) {
+	t.Setenv("WEKNORA_IM_SEGMENT_DELAY_MS", "")
+	if got := segmentDelayInterval(); got != time.Second {
+		t.Errorf("default delay: want 1s, got %v", got)
+	}
+}
+
+func TestSegmentDelayInterval_EnvOverride(t *testing.T) {
+	t.Setenv("WEKNORA_IM_SEGMENT_DELAY_MS", "500")
+	if got := segmentDelayInterval(); got != 500*time.Millisecond {
+		t.Errorf("env override: want 500ms, got %v", got)
+	}
+	t.Setenv("WEKNORA_IM_SEGMENT_DELAY_MS", "0")
+	if got := segmentDelayInterval(); got != 0 {
+		t.Errorf("zero env should disable delay, got %v", got)
+	}
+	t.Setenv("WEKNORA_IM_SEGMENT_DELAY_MS", "garbage")
+	if got := segmentDelayInterval(); got != time.Second {
+		t.Errorf("garbage env should fall back to default, got %v", got)
+	}
+	t.Setenv("WEKNORA_IM_SEGMENT_DELAY_MS", "-100")
+	if got := segmentDelayInterval(); got != time.Second {
+		t.Errorf("negative env should fall back to default, got %v", got)
+	}
+}
 
 // ── Hybrid compact-mode delivery (single bubble when short, multi-bubble
 // when long) ───────────────────────────────────────────────────────────

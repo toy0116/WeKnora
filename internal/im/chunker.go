@@ -108,10 +108,19 @@ func splitTableAware(content string, runeBudget int) ([]string, bool) {
 	trailer := strings.Join(lines[dataEndIdx:], "\n")
 
 	headerBlock := header + "\n" + separator + "\n"
-	headerBudget := utf8.RuneCountInString(headerBlock)
 
 	var segments []string
 	// First segment: preamble + header + as many rows as fit.
+	//
+	// Guarantee at least one row in the first segment even when preamble is
+	// already eating most of the budget. The old check `first.Len() > headerBudget`
+	// compared bytes-of-preamble-plus-header against runes-of-header — which
+	// is essentially always true once preamble is non-empty, causing the loop
+	// to bail out before adding ANY row when even the first row would push the
+	// candidate over budget. That bug produced the "first segment is empty
+	// rows" / "first bubble very short" symptom reported on the 4392-rune
+	// reply that split into 4 segments. Now we use rowIdx>0 to require at
+	// least one row before honoring the budget cap.
 	first := strings.Builder{}
 	if strings.TrimSpace(preamble) != "" {
 		first.WriteString(preamble)
@@ -121,7 +130,7 @@ func splitTableAware(content string, runeBudget int) ([]string, bool) {
 	rowIdx := 0
 	for rowIdx < len(dataRows) {
 		candidate := first.String() + dataRows[rowIdx] + "\n"
-		if utf8.RuneCountInString(candidate) > runeBudget && first.Len() > headerBudget {
+		if rowIdx > 0 && utf8.RuneCountInString(candidate) > runeBudget {
 			break
 		}
 		first.WriteString(dataRows[rowIdx])

@@ -2073,7 +2073,24 @@ loop:
 		// Segments 2..N: each gets a fresh bubble. Failures on individual
 		// segments are logged but not fatal — partial delivery is better
 		// than silent total failure.
+		//
+		// Inter-segment delay: WeCom's server-side does NOT guarantee
+		// ordering when multiple stream sessions are opened in rapid
+		// succession under the same req_id — empirically we observed
+		// segments arriving out of order in the chat ([1/4][3/4][2/4][4/4]).
+		// A short sleep between segments lets WeCom serialize the
+		// previous bubble's commit before accepting the next one.
+		// Configurable via WEKNORA_IM_SEGMENT_DELAY_MS (default 1000).
+		segmentDelay := segmentDelayInterval()
 		for i := 1; i < len(segments); i++ {
+			if segmentDelay > 0 {
+				select {
+				case <-time.After(segmentDelay):
+				case <-ctx.Done():
+					logger.Warnf(ctx, "[IM] compact-mode delivery cancelled at segment %d/%d", i+1, len(segments))
+					goto afterSegments
+				}
+			}
 			body := fmt.Sprintf("[%d/%d]\n\n%s", i+1, len(segments), segments[i])
 			segStreamID, err := streamer.StartStream(ctx, msg)
 			if err != nil {
@@ -2091,6 +2108,7 @@ loop:
 					i+1, len(segments), err)
 			}
 		}
+	afterSegments:
 
 		if len(segments) > 1 {
 			logger.Infof(ctx, "[IM] compact-mode multi-bubble delivery: %d segments (budget=%d runes, answer=%d runes)",
@@ -2139,6 +2157,25 @@ func truncateForCompactDisplay(answer string, budgetRunes int) string {
 	head := string(runes[:budgetRunes-footerReserve])
 	footer := fmt.Sprintf("\n\n…（完整回答共 %d 字，因平台显示上限已截断；完整内容请到 Web 端查看）", len(runes))
 	return head + footer
+}
+
+// segmentDelayInterval returns the delay between consecutive multi-bubble
+// segments in compact mode. WeCom's server doesn't reliably preserve
+// ordering when multiple stream sessions are opened in rapid succession
+// under the same req_id; a short delay lets the previous bubble fully
+// commit before the next StartStream arrives.
+//
+// Configurable via WEKNORA_IM_SEGMENT_DELAY_MS (milliseconds). Zero disables
+// the delay entirely (useful for tests and platforms that don't have the
+// ordering issue). Default 1000ms is the empirical floor that fixed the
+// "[1/4][3/4][2/4][4/4]" ordering bug observed on session f1dfa510.
+func segmentDelayInterval() time.Duration {
+	if v := os.Getenv("WEKNORA_IM_SEGMENT_DELAY_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return time.Duration(n) * time.Millisecond
+		}
+	}
+	return time.Second
 }
 
 // isCompactPlatform returns true for IM platforms with a hard per-message
