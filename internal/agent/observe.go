@@ -72,46 +72,110 @@ type responseVerdict struct {
 // "stop" but the content is clearly an intent-to-act sentence rather than a
 // substantive reply.
 //
-// Detection heuristics (all must be true):
+// Bilingual (English + Chinese) detection — mimo-v2.5-pro especially likes
+// to emit Chinese planning artifacts like:
+//
+//	"已获取完整的 R1520 数据手册和 Wiki 信息，现在为你整理规格摘要"
+//
+// which used to slip past English-only detection and finish the agent
+// loop with 88 runes of "I'll do X" instead of the actual answer.
+//
+// Detection (all must be true):
 //   - Content is short (≤ 400 chars after trimming)
-//   - Starts with a known planning prefix (case-insensitive)
-//   - Contains at least one action verb associated with tool use
+//   - Starts with a known planning prefix OR contains an action-bridge
+//     pattern (e.g. "已...现在...", "got X, now Y")
+//   - Contains at least one action verb associated with tool use or
+//     answer-composition
 func isPlanningArtifact(content string) bool {
 	c := strings.TrimSpace(content)
-	if len(c) > 400 {
+	if c == "" || len(c) > 400 {
 		return false
 	}
 	lower := strings.ToLower(c)
-	planningPrefixes := []string{
+
+	// English planning prefixes (case-insensitive prefix match).
+	englishPrefixes := []string{
 		"now let me", "let me", "i'll now", "i will now", "i'm going to",
 		"i am going to", "i need to", "first, let me", "next, let me",
 		"first let me", "next let me", "i'll", "i will ", "let's ",
 	}
+	// Chinese planning prefixes (raw rune match on TrimSpace'd content).
+	chinesePrefixes := []string{
+		"现在", "让我", "我将", "我来", "我会", "首先", "接下来", "下面",
+		"我需要", "稍等", "稍候", "我先", "请稍",
+	}
+	// Chinese "X already done, now Y" bridge patterns — these don't require
+	// the content to START with a prefix; they're a tell on their own.
+	// Example: "已获取 X 信息，现在为你整理 Y" — the "已X，现在Y" structure
+	// is the giveaway, regardless of what comes before "已".
+	chineseBridges := []string{
+		"已获取", "已查询", "已检索", "已找到", "已读取", "已收集", "已完成",
+		"现在为你", "现在为您", "现在给你", "现在给您", "马上为你", "马上为您",
+		"接下来为你", "接下来为您",
+	}
+
 	hasPrefix := false
-	for _, p := range planningPrefixes {
+	for _, p := range englishPrefixes {
 		if strings.HasPrefix(lower, p) {
 			hasPrefix = true
 			break
 		}
 	}
 	if !hasPrefix {
+		for _, p := range chinesePrefixes {
+			if strings.HasPrefix(c, p) {
+				hasPrefix = true
+				break
+			}
+		}
+	}
+	if !hasPrefix {
+		for _, p := range chineseBridges {
+			if strings.Contains(c, p) {
+				hasPrefix = true
+				break
+			}
+		}
+	}
+	if !hasPrefix {
 		return false
 	}
-	actionVerbs := []string{
+
+	// Action verbs that signal "I'm about to act / synthesise" rather than
+	// the act of acting / synthesising itself.
+	englishActions := []string{
 		"fetch", "read", "search", "look up", "look for", "check", "retrieve",
 		"get", "find", "examine", "query", "explore", "review", "access",
 		"load", "pull", "gather", "collect",
+		// Answer-composition verbs (model says it's about to write):
+		"summarize", "summarise", "synthesize", "synthesise", "compile",
+		"organize", "organise", "prepare", "draft",
 	}
-	for _, v := range actionVerbs {
+	for _, v := range englishActions {
 		if strings.Contains(lower, v) {
 			return true
 		}
 	}
-	// Also catch "escape to web" patterns regardless of prefix:
-	// e.g. "…from the web since it's a recent product"
-	webEscapeTerms := []string{"from the web", "from the internet", "online search", "web search"}
+	chineseActions := []string{
+		// Retrieval / inspection verbs
+		"查找", "搜索", "检索", "查看", "查询", "获取", "读取", "收集", "提取",
+		// Answer-composition verbs
+		"整理", "总结", "汇总", "归纳", "梳理", "组织", "准备", "撰写", "编写",
+		"分析", "处理", "回答", "答复", "回应", "解答",
+	}
+	for _, v := range chineseActions {
+		if strings.Contains(c, v) {
+			return true
+		}
+	}
+
+	// "Escape to web" patterns regardless of prefix.
+	webEscapeTerms := []string{
+		"from the web", "from the internet", "online search", "web search",
+		"网上搜", "网络搜", "上网查",
+	}
 	for _, t := range webEscapeTerms {
-		if strings.Contains(lower, t) {
+		if strings.Contains(lower, t) || strings.Contains(c, t) {
 			return true
 		}
 	}
