@@ -1662,6 +1662,30 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		return s.fallbackNonStream(ctx, msg, session, customAgent, kbIDs, adapter, userKey, fileSvc)
 	}
 
+	// compactMode: hide the thinking process from the IM bubble entirely and
+	// render only a brief "thinking..." placeholder during the agent loop,
+	// then atomically swap the placeholder for the final answer at end-of-
+	// stream. Only triggered for platforms with a hard per-message display
+	// cap (WeCom ~746 chars empirically) AND where the adapter supports
+	// content replacement (WeCom long-conn implements StreamContentReplacer).
+	//
+	// On other platforms (Feishu cards / Slack / TG / Mattermost / web SSE),
+	// the previous behaviour stands — thinking + tool calls + answer all
+	// stream to the bubble incrementally, since those platforms either
+	// handle long messages natively or render in a collapsible thinking block.
+	replacer, _ := streamer.(StreamContentReplacer)
+	compactMode := replacer != nil && isCompactPlatform(string(msg.Platform))
+	if compactMode {
+		// Show placeholder immediately so the user sees acknowledgement.
+		// Errors here are warnings only — losing the placeholder doesn't
+		// break the eventual final-answer replacement.
+		if err := replacer.ReplaceStreamContent(ctx, msg, streamID, "💭 思考中, 请稍候..."); err != nil {
+			logger.Warnf(ctx, "[IM] compact-mode placeholder failed: %v", err)
+		}
+		logger.Infof(ctx, "[IM] Compact mode enabled (platform=%s session=%s) — thinking hidden, single-bubble final answer",
+			msg.Platform, session.ID)
+	}
+
 	// Prepare the QA pipeline
 	// No total deadline: each agent round has its own LLMCallTimeout (default 120s).
 	// A hard pipeline deadline would kill multi-round agent reasoning prematurely.
@@ -1738,12 +1762,19 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		bufMu.Lock()
 		answerBuilder.WriteString(data.Content)
 
-		if thinkBlockOpen && !answerStarted {
-			answerStarted = true
-			bufWrite("\n</think>\n\n")
+		// In compact mode we DON'T stream answer chunks to the bubble —
+		// the bubble still shows the "💭 思考中..." placeholder. The full
+		// answer is built up in answerBuilder, then replaced into the
+		// bubble once at end-of-stream. This keeps the WeCom bubble at
+		// a single, clean message rather than incrementally growing past
+		// the platform's display cap.
+		if !compactMode {
+			if thinkBlockOpen && !answerStarted {
+				answerStarted = true
+				bufWrite("\n</think>\n\n")
+			}
+			bufWrite(data.Content)
 		}
-
-		bufWrite(data.Content)
 		streamedAny = true
 		bufMu.Unlock()
 
@@ -1768,8 +1799,13 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		return nil
 	})
 
-	// Subscribe to agent thought events — stream thinking content into <think> block
+	// Subscribe to agent thought events — stream thinking content into <think> block.
+	// In compact mode, skip writing to buf entirely (bubble stays on the
+	// "💭 思考中..." placeholder until the final answer arrives).
 	eventBus.On(event.EventAgentThought, func(_ context.Context, evt event.Event) error {
+		if compactMode {
+			return nil
+		}
 		data, ok := evt.Data.(event.AgentThoughtData)
 		if !ok {
 			return nil
@@ -1782,9 +1818,11 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 	})
 
 	// Subscribe to agent tool call events — write status line into <think> block.
-	// The engine may emit this event twice per tool call (once during streaming,
-	// once at execution), so we deduplicate by ToolCallID.
+	// Compact mode: skip; the user only sees the placeholder + final answer.
 	eventBus.On(event.EventAgentToolCall, func(_ context.Context, evt event.Event) error {
+		if compactMode {
+			return nil
+		}
 		data, ok := evt.Data.(event.AgentToolCallData)
 		if !ok {
 			return nil
@@ -1806,8 +1844,12 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 		return nil
 	})
 
-	// Subscribe to agent tool result events — write result line into <think> block
+	// Subscribe to agent tool result events — write result line into <think> block.
+	// Compact mode: skip.
 	eventBus.On(event.EventAgentToolResult, func(_ context.Context, evt event.Event) error {
+		if compactMode {
+			return nil
+		}
 		data, ok := evt.Data.(event.AgentToolResultData)
 		if !ok {
 			return nil
@@ -1984,32 +2026,31 @@ loop:
 		}
 	}
 
-	// End the stream
-	if err := streamer.EndStream(ctx, msg, streamID); err != nil {
-		logger.Warnf(ctx, "[IM] EndStream failed: %v", err)
-	}
-
 	if answer == "" {
 		answer = "抱歉，我暂时无法回答这个问题。"
 	}
 
-	// Overflow-segment fallback for IM platforms with strict per-message
-	// display caps (notably WeCom — measured empirically at ~746 visible
-	// characters; session 50e8531f cut after Priva's pitch in an 11,784-
-	// char reply). When the full answer overflows that budget, the stream
-	// bubble in the chat shows only the first segment; we send the
-	// remaining segments as separate follow-up messages so the user
-	// actually receives the whole answer.
-	//
-	// Only kicks in for platforms that we know have a hard display cap.
-	// Other platforms keep the existing single-stream behavior so we
-	// don't introduce gratuitous segmentation where the platform handles
-	// long messages fine.
-	if budget := overflowBudgetFor(string(msg.Platform)); budget > 0 {
-		segments := SplitLongReply(answer, budget)
-		if len(segments) > 1 {
-			s.sendOverflowSegments(ctx, msg, streamer, segments)
+	// Compact-mode final replacement: swap the "💭 思考中..." placeholder
+	// for the actual answer in a single atomic frame BEFORE EndStream.
+	// If the answer exceeds the platform's display budget, truncate to the
+	// budget and append a footer pointing to the web UI for the full content
+	// — preferable to chunking into N bubbles (which made UX brittle and is
+	// what we explicitly walked back from in this commit).
+	if compactMode {
+		display := answer
+		if budget := overflowBudgetFor(string(msg.Platform)); budget > 0 {
+			display = truncateForCompactDisplay(answer, budget)
 		}
+		if err := replacer.ReplaceStreamContent(ctx, msg, streamID, display); err != nil {
+			logger.Warnf(ctx, "[IM] compact-mode ReplaceStreamContent failed: %v", err)
+		}
+	}
+
+	// End the stream (replace-mode adapters: the final frame from above is
+	// what the bubble shows; this just sets finish=true so the platform
+	// stops marking it streaming).
+	if err := streamer.EndStream(ctx, msg, streamID); err != nil {
+		logger.Warnf(ctx, "[IM] EndStream failed: %v", err)
 	}
 
 	assistantMsg.Content = answer
@@ -2020,6 +2061,45 @@ loop:
 
 	logger.Infof(ctx, "[IM] Stream reply sent: platform=%s user=%s answer_len=%d", msg.Platform, msg.UserID, len(answer))
 	return nil
+}
+
+// truncateForCompactDisplay returns answer if it fits in budgetRunes;
+// otherwise it cuts at a slightly tighter budget (to leave headroom for the
+// footer) and appends a footer pointing the user to the web UI for the
+// full content. The footer uses Chinese because the only platforms hitting
+// this path today are zh-CN IM apps (WeCom / WeChat).
+func truncateForCompactDisplay(answer string, budgetRunes int) string {
+	const footerReserve = 80 // runes reserved for the truncation notice
+	if budgetRunes <= footerReserve {
+		// Pathologically small budget — just hard-truncate without footer.
+		runes := []rune(answer)
+		if len(runes) <= budgetRunes {
+			return answer
+		}
+		return string(runes[:budgetRunes])
+	}
+	runes := []rune(answer)
+	if len(runes) <= budgetRunes {
+		return answer
+	}
+	head := string(runes[:budgetRunes-footerReserve])
+	footer := fmt.Sprintf("\n\n…（完整回答共 %d 字，因平台显示上限已截断；完整内容请到 Web 端查看）", len(runes))
+	return head + footer
+}
+
+// isCompactPlatform returns true for IM platforms with a hard per-message
+// display cap that makes incremental streaming of thinking content user-
+// hostile. For these platforms we use the compact-mode flow: hide thinking,
+// show a placeholder, replace with final answer atomically at end. Other
+// platforms keep the streaming behavior because they either handle long
+// content natively (Feishu cards) or render thinking in collapsible blocks.
+func isCompactPlatform(platform string) bool {
+	switch platform {
+	case string(PlatformWeCom), string(PlatformWeChat):
+		return true
+	default:
+		return false
+	}
 }
 
 // overflowBudgetFor returns the per-message rune-count budget under which a

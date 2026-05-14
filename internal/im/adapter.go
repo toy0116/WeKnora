@@ -153,6 +153,24 @@ type StreamSender interface {
 	EndStream(ctx context.Context, incoming *IncomingMessage, streamID string) error
 }
 
+// StreamContentReplacer is an optional capability for IM adapters whose
+// underlying protocol is replace-based — the wire-level "stream" frames
+// fully redraw the bubble's content (notably WeCom's long-conn `stream`
+// msgtype). Standard StreamSender accumulates monotonically; this interface
+// lets the caller atomically swap the bubble's displayed content.
+//
+// The compact-mode display path in service.go uses this to:
+//   1. Show a brief "💭 思考中..." placeholder while the agent loop runs.
+//   2. At end-of-stream, replace the bubble with the final answer in one
+//      shot — bypassing the otherwise-monotonic accumulator that would
+//      stack thinking content + final answer past WeCom's ~746-char cap.
+//
+// Adapters whose protocol is append-only (Feishu cards, etc.) simply don't
+// implement this; the service falls back to the standard stream flow.
+type StreamContentReplacer interface {
+	ReplaceStreamContent(ctx context.Context, incoming *IncomingMessage, streamID string, content string) error
+}
+
 // FileDownloader is an optional interface that adapters can implement to support
 // downloading file attachments from the IM platform. When the adapter implements
 // this interface and the IM channel has a knowledge_base_id configured, file

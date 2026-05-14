@@ -275,6 +275,33 @@ func (c *LongConnClient) StartStream(ctx context.Context, incoming *im.IncomingM
 	return streamID, nil
 }
 
+// ReplaceStreamContent overwrites the accumulated content for streamID
+// instead of appending. WeCom's stream protocol is replace-based on the
+// wire (each frame fully replaces the bubble's display), but
+// SendStreamChunk APPENDS to the internal accumulator — so the bubble
+// monotonically grows with every chunk. This method clears the
+// accumulator first, then sends one frame with exactly the new content.
+//
+// Used by the IM service's compact-mode path (WeCom only) where the
+// "thinking process" is hidden from the bubble: we show a brief
+// "思考中..." placeholder during the LLM run, then atomically replace
+// it with the final answer at end-of-stream. Result: the user sees a
+// single clean bubble per question, regardless of how long the agent
+// loop took or how much thinking content was generated server-side.
+func (c *LongConnClient) ReplaceStreamContent(ctx context.Context, incoming *im.IncomingMessage, streamID string, content string) error {
+	c.streamBufsMu.Lock()
+	buf, ok := c.streamBufs[streamID]
+	if !ok {
+		c.streamBufsMu.Unlock()
+		return fmt.Errorf("unknown stream ID: %s", streamID)
+	}
+	buf.Reset()
+	buf.WriteString(content)
+	c.streamBufsMu.Unlock()
+
+	return c.sendStreamFrame(incoming, streamID, content, false)
+}
+
 // SendStreamChunk accumulates the content and sends the full text so far.
 // WeCom stream protocol is replace-based: each frame replaces the previous display.
 func (c *LongConnClient) SendStreamChunk(ctx context.Context, incoming *im.IncomingMessage, streamID string, content string) error {
