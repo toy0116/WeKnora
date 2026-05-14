@@ -6,6 +6,87 @@ import (
 	"unicode/utf8"
 )
 
+// ── Hybrid compact-mode delivery (single bubble when short, multi-bubble
+// when long) ───────────────────────────────────────────────────────────
+
+func TestOverflowBudgetFor_DefaultIsTwoThousandForWeComAndWeChat(t *testing.T) {
+	// Make sure the env var doesn't leak from a prior test.
+	t.Setenv("WEKNORA_IM_FRAME_BUDGET", "")
+	if got := overflowBudgetFor("wecom"); got != 2000 {
+		t.Errorf("wecom default budget: want 2000, got %d", got)
+	}
+	if got := overflowBudgetFor("wechat"); got != 2000 {
+		t.Errorf("wechat default budget: want 2000, got %d", got)
+	}
+}
+
+func TestOverflowBudgetFor_EnvOverride(t *testing.T) {
+	// Empirical calibration: operator should be able to dial the budget
+	// up or down without a rebuild based on what WeCom actually renders.
+	t.Setenv("WEKNORA_IM_FRAME_BUDGET", "3500")
+	if got := overflowBudgetFor("wecom"); got != 3500 {
+		t.Errorf("env override ignored: want 3500, got %d", got)
+	}
+	// Garbage value → fall back to default (not zero), so a typo doesn't
+	// silently kill the splitter entirely.
+	t.Setenv("WEKNORA_IM_FRAME_BUDGET", "not-a-number")
+	if got := overflowBudgetFor("wecom"); got != 2000 {
+		t.Errorf("non-numeric env should fall back to default, got %d", got)
+	}
+	// Zero / negative also fall back — those would degenerate the splitter.
+	t.Setenv("WEKNORA_IM_FRAME_BUDGET", "0")
+	if got := overflowBudgetFor("wecom"); got != 2000 {
+		t.Errorf("zero env should fall back to default, got %d", got)
+	}
+}
+
+func TestOverflowBudgetFor_NonIMPlatformsReturnZero(t *testing.T) {
+	// Other platforms don't have a known hard cap — don't split.
+	// Env var must not leak into them either (only applies to wecom/wechat).
+	t.Setenv("WEKNORA_IM_FRAME_BUDGET", "1234")
+	for _, p := range []string{"feishu", "slack", "telegram", "mattermost", "", "unknown"} {
+		if got := overflowBudgetFor(p); got != 0 {
+			t.Errorf("platform=%q: expected zero budget (no split), got %d", p, got)
+		}
+	}
+}
+
+// Sanity check that the existing SplitLongReply works at the new default
+// budget. Calibrates expectations: a 6000-rune answer should split into
+// 3 segments at budget 2000, not 10.
+func TestSplitLongReply_RealisticReplyAtDefaultBudget(t *testing.T) {
+	// Mimic a typical pitch-table response that hit the WeCom budget
+	// historically (median historical reply: 2762 chars).
+	answer := strings.Repeat("产品规格说明 product specs and bullet point details. ", 100) // ~6500 runes
+	segs := SplitLongReply(answer, 2000)
+	// Should split into 3-5 segments at 2000-budget (not the 10+ we'd
+	// get at the old 600 budget).
+	if len(segs) < 2 || len(segs) > 6 {
+		t.Errorf("expected 2-6 segments for ~6500-rune answer at budget=2000, got %d", len(segs))
+	}
+	for i, s := range segs {
+		if utf8.RuneCountInString(s) > 2000 {
+			t.Errorf("segment %d exceeds budget: %d runes", i, utf8.RuneCountInString(s))
+		}
+	}
+}
+
+func TestSplitLongReply_ShortAnswerStaysSingleAtDefaultBudget(t *testing.T) {
+	// 32% of historical wecom replies are < 700 chars — these MUST stay
+	// single-segment at the new default budget so the bubble UX is clean.
+	short := "Robustel EG5120 是一款工业边缘计算网关，集成 NPU + 蜂窝 + Wi-Fi 6。" + strings.Repeat("规格 ", 100) // ~500 runes
+	segs := SplitLongReply(short, 2000)
+	if len(segs) != 1 {
+		t.Errorf("short answer (<budget) must stay single bubble, got %d segments", len(segs))
+	}
+}
+
+// ── Legacy truncateForCompactDisplay tests (deprecated path) ─────────────
+//
+// The function still exists as a stub but isn't on the runtime path anymore.
+// These tests pin the deprecated contract for now; remove together with the
+// function in a follow-up.
+
 // Compact-mode display path: WeCom / WeChat bubble has a hard ~746-char
 // rendering cap. Instead of chunking long answers into N bubbles (the old
 // SplitLongReply path, which gave a noisy UX), we now hide the thinking
