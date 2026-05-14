@@ -68,6 +68,19 @@ func (a *WSAdapter) EndStream(ctx context.Context, incoming *im.IncomingMessage,
 	return a.client.EndStream(ctx, incoming, streamID)
 }
 
+// ── StreamContentReplacer implementation ──
+// Forwards to LongConnClient.ReplaceStreamContent so the IM service's
+// compact-mode path can swap bubble content (e.g. "💭 思考中..." → final
+// answer) instead of monotonically appending. Without this forwarder, the
+// service's `streamer.(StreamContentReplacer)` type assertion would miss
+// the underlying client's capability and fall back to the old append path
+// — that was the bug that surfaced in the 21:02 wecom session where the
+// thinking process still streamed despite the compact-mode commit landing.
+
+func (a *WSAdapter) ReplaceStreamContent(ctx context.Context, incoming *im.IncomingMessage, streamID string, content string) error {
+	return a.client.ReplaceStreamContent(ctx, incoming, streamID, content)
+}
+
 // ── FileDownloader implementation ──
 // WeCom aibot provides AES-256-CBC encrypted URLs for image/file/video messages.
 // Each message carries its own aeskey for decryption.
