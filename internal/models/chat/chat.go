@@ -156,7 +156,15 @@ func NewRemoteChat(config *ChatConfig) (Chat, error) {
 		// Some models are registered in DB with provider="openai" even though their
 		// base URL reveals a more specific provider (e.g. MiMo at xiaomimimo.com).
 		// When URL detection returns a concrete non-OpenAI provider, prefer it.
-		if urlDetected := provider.DetectProvider(config.BaseURL); urlDetected != "" && urlDetected != provider.ProviderOpenAI {
+		//
+		// IMPORTANT: DetectProvider("") returns ProviderGeneric (the fall-through
+		// default of its switch). Without the Generic guard below, an empty
+		// BaseURL would silently clobber an explicit Provider="anthropic" (or any
+		// other native provider that isn't OpenAI) with ProviderGeneric, which
+		// then falls through to NewRemoteAPIChat instead of NewAnthropicChat.
+		// Skip override when the URL detector produced the "no signal" default —
+		// the explicit config.Provider wins in that case.
+		if urlDetected := provider.DetectProvider(config.BaseURL); urlDetected != "" && urlDetected != provider.ProviderOpenAI && urlDetected != provider.ProviderGeneric {
 			providerName = urlDetected
 		}
 	}
