@@ -540,3 +540,11 @@ func defaultIfZero(v, def int) int {
 	}
 	return v
 }
+
+// GetIndexedSourceIDsByKnowledge returns an empty set for the Tencent VectorDB engine.
+// Tencent VectorDB does not maintain a separate source-ID index, so incremental dedup
+// is handled at the ingest layer rather than queried here. Mirrors the other
+// vector-store implementations (doris, elasticsearch, milvus).
+func (r *repository) GetIndexedSourceIDsByKnowledge(_ context.Context, _ string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}
