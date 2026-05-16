@@ -10,13 +10,11 @@ import (
 	agentmemory "github.com/Tencent/WeKnora/internal/agent/memory"
 	agenttoken "github.com/Tencent/WeKnora/internal/agent/token"
 	"github.com/Tencent/WeKnora/internal/agent/tools"
-	llmcontext "github.com/Tencent/WeKnora/internal/application/service/llmcontext"
 	"github.com/Tencent/WeKnora/internal/event"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/rerank"
 	"github.com/Tencent/WeKnora/internal/types"
-	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
 
 // AgentQA performs agent-based question answering with conversation history and streaming support
@@ -130,66 +128,58 @@ func (s *sessionService) AgentQA(
 		logger.Infof(ctx, "knowledge_search tool not enabled, skipping rerank model initialization")
 	}
 
-	// Get or create contextManager for this session
-	contextManager := s.getContextManagerForSession()
-
-	// Set system prompt for the current agent in context manager
-	// This ensures the context uses the correct system prompt when switching agents
-	systemPrompt := agentConfig.ResolveSystemPrompt(agentConfig.WebSearchEnabled)
-	if systemPrompt != "" {
-		if err := contextManager.SetSystemPrompt(ctx, sessionID, systemPrompt); err != nil {
-			logger.Warnf(ctx, "Failed to set system prompt in context manager: %v", err)
-		} else {
-			logger.Infof(ctx, "System prompt updated in context manager for agent")
+	// Load multi-turn history directly from DB (the single source of truth).
+	// AgentSteps on each historical assistant message are expanded into proper
+	// assistant_with_tool_calls + tool messages so the model can see what was
+	// tried last turn — except final_answer, which is replayed as the trailing
+	// canonical assistant message.
+	var llmContext []chat.Message
+	if agentConfig.MultiTurnEnabled {
+		historyTurns := agentConfig.HistoryTurns
+		if historyTurns <= 0 {
+			historyTurns = 5
 		}
-	}
+		llmContext, err = LoadAgentHistory(ctx, s.messageRepo, sessionID, historyTurns)
+		if err != nil {
+			logger.Warnf(ctx, "Failed to load agent history from DB: %v, continuing without history", err)
+			llmContext = []chat.Message{}
+		}
+		logger.Infof(ctx, "Loaded %d history messages from DB (turns=%d)", len(llmContext), historyTurns)
 
-	// Get LLM context from context manager
-	llmContext, err := s.getContextForSession(ctx, contextManager, sessionID)
-	if err != nil {
-		logger.Warnf(ctx, "Failed to get LLM context: %v, continuing without history", err)
-		llmContext = []chat.Message{}
-	}
-	logger.Infof(ctx, "Loaded %d messages from LLM context manager", len(llmContext))
+		// Role-asymmetric compaction: every long assistant message is replaced
+		// with a structured outline that preserves intent/format/citations but
+		// strips specific factual claims. First-principles defence against
+		// "conversation poisoning" — past assistant hallucinations re-entering
+		// context every turn as authoritative-looking statements.
+		//
+		// Runs BEFORE Consolidator so that
+		//   (a) the consolidator sees already-shrunk content, and
+		//   (b) any future-turn summary inherits the outline form, not the
+		//       original facts.
+		//
+		// Off by default; opt-in per agent (AssistantContextCompaction).
+		// Reattached here under the new agent_history.LoadAgentHistory path —
+		// pre-refactor wiring lived in the deleted llmcontext block above.
+		if agentConfig.AssistantContextCompaction {
+			compactor := agentmemory.NewRoleAsymmetricCompactor(summaryModel)
+			preCount := len(llmContext)
+			llmContext = compactor.Compact(ctx, llmContext)
+			logger.Infof(ctx, "[Compactor] applied role-asymmetric compaction: %d messages processed",
+				preCount)
+		}
 
-	// Role-asymmetric compaction: every long assistant message is replaced
-	// with a structured outline that preserves intent/format/citations but
-	// strips specific factual claims. This is the first-principles defence
-	// against "conversation poisoning" — past assistant hallucinations
-	// re-entering context every turn as authoritative-looking statements.
-	//
-	// Runs BEFORE the existing Consolidator so that
-	//   (a) the consolidator sees already-shrunk content (likely no need to
-	//       summarise further), and
-	//   (b) any future-turn summary built by the consolidator inherits the
-	//       outline form, not the original facts.
-	//
-	// Only runs when explicitly enabled on the agent config; default off
-	// to preserve current behaviour for non-IM agents.
-	if agentConfig.AssistantContextCompaction {
-		compactor := agentmemory.NewRoleAsymmetricCompactor(summaryModel)
-		preCount := len(llmContext)
-		llmContext = compactor.Compact(ctx, llmContext)
-		logger.Infof(ctx, "[Compactor] applied role-asymmetric compaction: %d messages processed",
-			preCount)
-	}
-
-	// Proactively consolidate context when session history is long.
-	// Long-running IM sessions (e.g. WeChat Work groups) cannot easily start a new
-	// session, so we summarise older turns in-place before they overflow the LLM
-	// context window and degrade answer quality.
-	llmContext = s.maybeConsolidateHistory(ctx, summaryModel, agentConfig, llmContext)
-
-	// Apply multi-turn configuration for Agent mode
-	// Note: In Agent mode, context is managed by contextManager with compression strategies,
-	// so we don't apply HistoryTurns limit here. HistoryTurns is used in normal (KnowledgeQA) mode.
-	if !agentConfig.MultiTurnEnabled {
-		// Multi-turn disabled, clear history
-		logger.Infof(ctx, "Multi-turn disabled for this agent, clearing history context")
+		// Proactively consolidate context when session history is long.
+		// Long-running IM sessions (WeChat Work groups, etc.) cannot easily
+		// start a new session, so we summarise older turns in-place before
+		// they overflow the LLM context window. Operates over the freshly-
+		// loaded llmContext from DB.
+		llmContext = s.maybeConsolidateHistory(ctx, summaryModel, agentConfig, llmContext)
+	} else {
+		logger.Infof(ctx, "Multi-turn disabled for this agent, running without history")
 		llmContext = []chat.Message{}
 	}
 
-	// Create agent engine with EventBus and ContextManager
+	// Create agent engine with EventBus
 	logger.Info(ctx, "Creating agent engine")
 	engine, err := s.agentService.CreateAgentEngine(
 		ctx,
@@ -197,7 +187,6 @@ func (s *sessionService) AgentQA(
 		summaryModel,
 		rerankModel,
 		eventBus,
-		contextManager,
 		sessionID,
 	)
 	if err != nil {
@@ -398,32 +387,6 @@ func (s *sessionService) configureSkillsFromAgent(
 		logger.Warnf(ctx, "Unknown SkillsSelectionMode=%s: skills disabled", customAgent.Config.SkillsSelectionMode)
 	}
 
-}
-
-// getContextManagerForSession creates a context manager for the session.
-func (s *sessionService) getContextManagerForSession() interfaces.ContextManager {
-	return llmcontext.NewContextManagerFromConfig(s.sessionStorage, s.messageRepo)
-}
-
-// getContextForSession retrieves LLM context for a session
-func (s *sessionService) getContextForSession(
-	ctx context.Context,
-	contextManager interfaces.ContextManager,
-	sessionID string,
-) ([]chat.Message, error) {
-	history, err := contextManager.GetContext(ctx, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get context: %w", err)
-	}
-
-	// Log context statistics
-	stats, _ := contextManager.GetContextStats(ctx, sessionID)
-	if stats != nil {
-		logger.Infof(ctx, "LLM context stats for session %s: messages=%d, tokens=~%d, compressed=%v",
-			sessionID, stats.MessageCount, stats.TokenCount, stats.IsCompressed)
-	}
-
-	return history, nil
 }
 
 // imHistoryConsolidationThreshold is the number of non-system messages in a session
