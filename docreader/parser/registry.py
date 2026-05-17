@@ -128,6 +128,12 @@ def _build_default_registry() -> ParserEngineRegistry:
             "markdown": MarkdownParser,
             "xlsx": ExcelParser,
             "xls": ExcelParser,
+            # MarkItDown handles HTML cleanly (drops scripts/styles, preserves
+            # headings/lists/tables/links into markdown). Routing html/htm into
+            # the builtin engine lets a plain file upload of a .html file
+            # work without forcing the user to first run markitdown manually.
+            "html": MarkitdownParser,
+            "htm":  MarkitdownParser,
             **_image_types,
         },
         description="内置解析引擎",
@@ -146,6 +152,8 @@ def _build_default_registry() -> ParserEngineRegistry:
             "xlsx": MarkitdownParser,
             "xls": MarkitdownParser,
             "csv": MarkitdownParser,
+            "html": MarkitdownParser,
+            "htm":  MarkitdownParser,
         },
         description="MarkItDown 解析引擎（微软 MarkItDown 库）",
     )

@@ -3346,6 +3346,7 @@ export default {
       fileTypeCsv: 'Файлы CSV',
       fileTypeText: 'Текстовые файлы',
       fileTypeJson: 'Файлы JSON',
+      fileTypeHtml: 'HTML-страницы',
       fileTypeImage: 'Изображения',
       fileTypeAudiovisual: 'Аудио',
       engines: {

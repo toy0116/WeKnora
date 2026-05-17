@@ -3677,6 +3677,7 @@ export default {
       fileTypeCsv: "CSV 文件",
       fileTypeText: "纯文本",
       fileTypeJson: "JSON 文件",
+      fileTypeHtml: "网页 HTML",
       fileTypeImage: "图片",
       fileTypeAudiovisual: "音频",
       engines: {
@@ -3699,6 +3700,10 @@ export default {
         weknoracloud: {
           name: "WeKnora Cloud",
           desc: "使用 WeKnora Cloud 进行文档解析",
+        },
+        markitdown: {
+          name: "MarkItDown",
+          desc: "微软 MarkItDown 库（轻量，适合 HTML/Markdown/CSV）",
         },
       },
     },

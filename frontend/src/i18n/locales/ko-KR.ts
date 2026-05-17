@@ -3737,6 +3737,7 @@ export default {
       fileTypeCsv: 'CSV 파일',
       fileTypeText: '일반 텍스트',
       fileTypeJson: 'JSON 파일',
+      fileTypeHtml: '웹 페이지 (HTML)',
       fileTypeImage: '이미지',
       fileTypeAudiovisual: '오디오',
       engines: {

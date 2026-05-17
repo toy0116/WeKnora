@@ -158,6 +158,7 @@ const fileTypeGroups = computed(() => {
   const mdExts = ['md', 'markdown'].filter(e => ft.has(e))
   const txtExts = ['txt'].filter(e => ft.has(e))
   const jsonExts = ['json'].filter(e => ft.has(e))
+  const htmlExts = ['html', 'htm'].filter(e => ft.has(e))
   const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'].filter(e => ft.has(e))
   const audioExts = ['mp3', 'wav', 'm4a', 'flac', 'ogg'].filter(e => ft.has(e))
   const audiovisualExts = [...audioExts]
@@ -170,6 +171,7 @@ const fileTypeGroups = computed(() => {
   if (mdExts.length) groups.push({ key: 'markdown', label: 'Markdown', icon: 'file-code', extensions: mdExts })
   if (txtExts.length) groups.push({ key: 'text', label: t('kbSettings.parser.fileTypeText'), icon: 'file', extensions: txtExts })
   if (jsonExts.length) groups.push({ key: 'json', label: t('kbSettings.parser.fileTypeJson'), icon: 'file-code', extensions: jsonExts })
+  if (htmlExts.length) groups.push({ key: 'html', label: t('kbSettings.parser.fileTypeHtml'), icon: 'file-code', extensions: htmlExts })
   if (imageExts.length) groups.push({ key: 'image', label: t('kbSettings.parser.fileTypeImage'), icon: 'image', extensions: imageExts })
   if (audiovisualExts.length) {
     groups.push({

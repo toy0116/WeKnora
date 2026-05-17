@@ -3681,6 +3681,7 @@ export default {
       fileTypeCsv: 'CSV Files',
       fileTypeText: 'Plain Text',
       fileTypeJson: 'JSON Files',
+      fileTypeHtml: 'Web Pages (HTML)',
       fileTypeImage: 'Images',
       fileTypeAudiovisual: 'Audio',
       engines: {

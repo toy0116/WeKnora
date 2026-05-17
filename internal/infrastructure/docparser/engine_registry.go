@@ -68,7 +68,10 @@ func (e *builtinEngine) Description() string {
 	return "DocReader built-in parser engine"
 }
 func (e *builtinEngine) FileTypes(_ bool) []string {
-	return []string{"docx", "doc", "pdf", "md", "markdown", "xlsx", "xls", "jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp", "mp3", "wav", "m4a", "flac", "ogg"}
+	// html/htm route to docreader's MarkitdownParser (registered there for
+	// both BUILTIN_ENGINE and "markitdown"). Lets a plain .html upload land
+	// in a KB without forcing the user to pre-convert via markitdown CLI.
+	return []string{"docx", "doc", "pdf", "md", "markdown", "xlsx", "xls", "html", "htm", "jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp", "mp3", "wav", "m4a", "flac", "ogg"}
 }
 func (e *builtinEngine) CheckAvailable(docreaderConnected bool, _ map[string]string) (bool, string) {
 	if docreaderConnected {

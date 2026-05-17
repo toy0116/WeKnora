@@ -455,6 +455,8 @@ var allowedFileURLExtensions = map[string]bool{
 	"pdf":  true,
 	"docx": true,
 	"doc":  true,
+	"html": true,
+	"htm":  true,
 	"mp3":  true,
 	"wav":  true,
 	"m4a":  true,
