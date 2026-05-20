@@ -744,9 +744,24 @@ func (s *knowledgeService) getSummary(ctx context.Context,
 		maxTokens = s.config.Conversation.Summary.MaxCompletionTokens
 	}
 
-	// Generate summary using AI model
+	// Generate summary using AI model.
+	//
+	// Pass the KB's vendor (empty when unset) into the prompt so the LLM can
+	// anchor product names. Without this the summary for, say, a Milesight
+	// EG71 datasheet that lives in a competitor-intel KB would render as
+	// "EG71 is …", and a downstream Robustel-listing query would pick it up
+	// and silently aggregate it into our own product tree (this is exactly
+	// the EG71 ownership-confusion bug). Prefixing "Milesight EG71 is …" at
+	// summary time fixes the root cause in the data, while the agent-prompt
+	// Product Ownership Rule provides defence-in-depth in the retrieval path.
+	kbForSummary, _ := s.kbService.GetKnowledgeBaseByID(ctx, knowledge.KnowledgeBaseID)
+	vendor := ""
+	if kbForSummary != nil {
+		vendor = strings.TrimSpace(kbForSummary.Vendor)
+	}
 	summaryPrompt := types.RenderPromptPlaceholders(s.config.Conversation.GenerateSummaryPrompt, types.PlaceholderValues{
 		"language": types.LanguageNameFromContext(ctx),
+		"vendor":   vendor,
 	})
 	thinking := false
 	summary, err := summaryModel.Chat(ctx, []chat.Message{

@@ -49,6 +49,17 @@ type KnowledgeBase struct {
 	IsTemporary bool `yaml:"is_temporary"            json:"is_temporary"            gorm:"default:false"`
 	// Description of the knowledge base
 	Description string `yaml:"description"             json:"description"`
+	// Vendor is the canonical product owner this KB belongs to. When set, the
+	// per-document summary pipeline prefixes the summary with this vendor name
+	// so downstream LLM consumers always see "Milesight EG71 is …" rather
+	// than the bare "EG71 is …" — see knowledge_process.getSummary.
+	//
+	// Empty / NULL → no vendor framing (user notes, mixed-source KBs, etc.).
+	// Convention: "Robustel" for own-product KBs, "Milesight" / "Teltonika"
+	// / etc. for single-vendor competitor KBs, leave empty for mixed-vendor
+	// competitive-intelligence KBs (where each doc should self-identify in
+	// its own summary or filename).
+	Vendor string `yaml:"vendor"                  json:"vendor"                  gorm:"column:vendor;type:varchar(64);default:''"`
 	// Tenant ID
 	TenantID uint64 `yaml:"tenant_id"               json:"tenant_id"`
 	// Chunking configuration

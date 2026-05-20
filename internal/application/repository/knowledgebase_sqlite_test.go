@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
     vector_store_id VARCHAR(36),
     wiki_config TEXT,
     indexing_strategy TEXT,
+    vendor VARCHAR(64) NOT NULL DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     deleted_at DATETIME
