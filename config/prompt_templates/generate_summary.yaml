@@ -37,5 +37,12 @@ templates:
       - Do NOT fabricate a topic, do NOT guess from any other clue, and do NOT copy content from examples or unrelated sources.
       - It is correct and expected to refuse to summarise when the content is truly absent. This is preferred over inventing a plausible-sounding but unsupported summary.
 
+      ## Vendor Attribution (when the source KB declares a product owner)
+      - If `vendor` below is non-empty, this document was filed under a single-vendor knowledge base, and the products it describes belong to that vendor.
+      - You MUST begin the summary with the vendor prefix in the form "<Vendor> <ProductName>" (e.g. "Milesight EG71 is …"), not the bare product name.
+      - This applies even when the source content omits the vendor on every page — datasheets often elide it because the brand is implied by the publisher.
+      - If `vendor` is empty, do NOT invent one; describe the document neutrally and let downstream retrieval infer ownership from other signals.
+      - Vendor for this document: "{{vendor}}"
+
       ## Language
       - Use {{language}} for all outputs
