@@ -99,6 +99,43 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		return existingKnowledge, types.NewDuplicateFileError(existingKnowledge)
 	}
 
+	// Soft-delete-aware dedup: before creating a brand-new row, check whether a
+	// row for this exact (tenant, kb, file_hash) was previously deleted. Without
+	// this check, GORM's default scoping (deleted_at IS NULL) hides the prior
+	// row from CheckKnowledgeExists, and we'd happily create a parallel row.
+	// That's the root cause of the EG71/Milesight ownership-confusion bug we
+	// hit earlier — two rows for the same Milesight datasheet, the older with
+	// a correct "Milesight EG71…" description and the newer (alive) one
+	// missing the vendor prefix.
+	//
+	// On hit: re-use the original ID, reset deleted_at + parse_status, and
+	// fall through to the normal upload-and-enqueue path so the restored row
+	// gets fresh chunks/embeddings.
+	if dead, err := s.repo.FindSoftDeletedByHash(ctx, tenantID, kbID, hash); err != nil {
+		logger.Errorf(ctx, "Failed to look up soft-deleted hash match: %v", err)
+		// Non-fatal — fall through to fresh create rather than block the user.
+	} else if dead != nil {
+		logger.Infof(ctx, "Restoring soft-deleted knowledge for hash %s: id=%s", hash, dead.ID)
+		if err := s.repo.RestoreSoftDeletedKnowledge(ctx, tenantID, dead.ID); err != nil {
+			logger.Errorf(ctx, "Failed to restore soft-deleted knowledge %s: %v", dead.ID, err)
+			// Fall through to fresh create — at worst we end up where we were
+			// before this fix; the user is not blocked.
+		} else {
+			// Treat the restored row as the canonical existing row so the rest
+			// of the function (storage quota, async task enqueue, etc.) sees a
+			// row to update rather than create. Re-fetch to get the freshly
+			// un-deleted state.
+			restored, fetchErr := s.repo.GetKnowledgeByID(ctx, tenantID, dead.ID)
+			if fetchErr == nil && restored != nil {
+				if err := s.repo.UpdateKnowledgeColumn(ctx, restored.ID, "created_at", time.Now()); err != nil {
+					logger.Warnf(ctx, "Failed to bump created_at on restored knowledge: %v", err)
+				}
+				return restored, types.NewDuplicateFileError(restored)
+			}
+			logger.Warnf(ctx, "Restored row not found after un-delete (id=%s, err=%v) — falling through to fresh create", dead.ID, fetchErr)
+		}
+	}
+
 	// Check storage quota
 	tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
 	if tenantInfo.StorageQuota > 0 && tenantInfo.StorageUsed >= tenantInfo.StorageQuota {

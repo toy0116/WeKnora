@@ -229,6 +229,22 @@ type KnowledgeRepository interface {
 		kbID string,
 		params *types.KnowledgeCheckParams,
 	) (bool, *types.Knowledge, error)
+	// FindSoftDeletedByHash looks for a *soft-deleted* knowledge row with the
+	// given (tenant, kb, file_hash). Used by the create-flow after
+	// CheckKnowledgeExists returns false: a hash match against a soft-deleted
+	// row means the user previously deleted this doc — restore the same row
+	// instead of creating a parallel one. Returns (nil, nil) when no match.
+	FindSoftDeletedByHash(
+		ctx context.Context,
+		tenantID uint64,
+		kbID string,
+		fileHash string,
+	) (*types.Knowledge, error)
+	// RestoreSoftDeletedKnowledge un-deletes a previously soft-deleted row by ID,
+	// resetting deleted_at to NULL, parse_status to "pending", and updated_at
+	// to NOW(). The caller is expected to re-enqueue the document-process task
+	// for the restored row after this returns.
+	RestoreSoftDeletedKnowledge(ctx context.Context, tenantID uint64, id string) error
 	// AminusB returns the difference set of A and B.
 	AminusB(ctx context.Context, Atenant uint64, A string, Btenant uint64, B string) ([]string, error)
 	UpdateKnowledgeColumn(ctx context.Context, id string, column string, value interface{}) error
