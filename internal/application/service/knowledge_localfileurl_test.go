@@ -12,14 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// withLocalFileURLRoots resets the sync.Once + roots slice, sets the env
-// to `dirs` (colon-joined), and triggers a fresh load. Tests must call
-// the returned cleanup to restore previous state — sync.Once is reset
-// again so other tests aren't affected by this one's env.
+// withLocalFileURLRoots resets the package-level allowlist state, points
+// the env at `dirs` (path-list-joined), forces a fresh load, and returns a
+// cleanup that restores the previous env and blanks the package state.
+//
+// We *don't* save/restore the sync.Once value itself — copying sync.Once
+// triggers a `noCopy` vet warning, and there's no semantic need: the next
+// test that needs a deterministic snapshot will allocate its own fresh
+// Once before triggering Do(loadLocalFileURLRoots).
 func withLocalFileURLRoots(t *testing.T, dirs ...string) func() {
 	t.Helper()
 	prevEnv, prevSet := os.LookupEnv("WEKNORA_LOCAL_FILE_URL_ROOTS")
-	prevOnce := localFileURLRootsOnce
 	prevRoots := localFileURLRoots
 
 	localFileURLRootsOnce = sync.Once{}
@@ -34,7 +37,7 @@ func withLocalFileURLRoots(t *testing.T, dirs ...string) func() {
 		} else {
 			_ = os.Unsetenv("WEKNORA_LOCAL_FILE_URL_ROOTS")
 		}
-		localFileURLRootsOnce = prevOnce
+		localFileURLRootsOnce = sync.Once{}
 		localFileURLRoots = prevRoots
 	}
 }
@@ -45,7 +48,6 @@ func withLocalFileURLRoots(t *testing.T, dirs ...string) func() {
 func TestResolveLocalFileURL_DisabledByDefault(t *testing.T) {
 	prev, set := os.LookupEnv("WEKNORA_LOCAL_FILE_URL_ROOTS")
 	_ = os.Unsetenv("WEKNORA_LOCAL_FILE_URL_ROOTS")
-	prevOnce := localFileURLRootsOnce
 	prevRoots := localFileURLRoots
 	localFileURLRootsOnce = sync.Once{}
 	localFileURLRoots = nil
@@ -53,7 +55,7 @@ func TestResolveLocalFileURL_DisabledByDefault(t *testing.T) {
 		if set {
 			_ = os.Setenv("WEKNORA_LOCAL_FILE_URL_ROOTS", prev)
 		}
-		localFileURLRootsOnce = prevOnce
+		localFileURLRootsOnce = sync.Once{}
 		localFileURLRoots = prevRoots
 	})
 

@@ -264,6 +264,69 @@ func (r *knowledgeRepository) CheckKnowledgeExists(
 	return false, nil, nil
 }
 
+// FindSoftDeletedByHash returns a soft-deleted (deleted_at NOT NULL)
+// knowledge row matching (tenant, kb, file_hash), or (nil, nil) when none.
+//
+// Used by the create-knowledge service after CheckKnowledgeExists returns
+// false: the hash didn't match any *live* row, but might still match a row
+// the user previously deleted. Recreating that document as a parallel row
+// is what produced the EG71/Milesight ownership-confusion bug — two rows
+// for the same file with diverging LLM-generated descriptions, the newer
+// of which had lost the vendor prefix and got cited as if it were native.
+//
+// The query Unscoped()s past GORM's default `deleted_at IS NULL` filter
+// and then re-asserts `deleted_at IS NOT NULL` so we cannot accidentally
+// match an alive row (CheckKnowledgeExists is responsible for those).
+func (r *knowledgeRepository) FindSoftDeletedByHash(
+	ctx context.Context,
+	tenantID uint64,
+	kbID string,
+	fileHash string,
+) (*types.Knowledge, error) {
+	if fileHash == "" {
+		return nil, nil
+	}
+	var knowledge types.Knowledge
+	err := r.db.WithContext(ctx).
+		Unscoped().
+		Where("tenant_id = ? AND knowledge_base_id = ? AND file_hash = ? AND deleted_at IS NOT NULL",
+			tenantID, kbID, fileHash).
+		Order("deleted_at DESC"). // newest soft-delete wins if there are multiple
+		First(&knowledge).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &knowledge, nil
+}
+
+// RestoreSoftDeletedKnowledge un-deletes the row identified by (tenant, id):
+// deleted_at → NULL, parse_status → "pending", updated_at → NOW(). The
+// caller must subsequently re-enqueue the document-process task so the
+// restored row gets fresh chunks/embeddings (the original chunk rows are
+// also soft-deleted under deleted_at and are NOT restored here — they
+// belong to the previous parse and may no longer match the current
+// chunking strategy / model / config).
+//
+// Idempotent: if the row is already alive, it just resets parse_status.
+func (r *knowledgeRepository) RestoreSoftDeletedKnowledge(
+	ctx context.Context, tenantID uint64, id string,
+) error {
+	return r.db.WithContext(ctx).
+		Unscoped().
+		Model(&types.Knowledge{}).
+		Where("tenant_id = ? AND id = ?", tenantID, id).
+		Updates(map[string]interface{}{
+			"deleted_at":   nil,
+			"parse_status": "pending",
+			// CURRENT_TIMESTAMP is SQL-standard (works on Postgres production and
+			// SQLite test envs alike); NOW() would force the unit test to mock.
+			"updated_at":   gorm.Expr("CURRENT_TIMESTAMP"),
+		}).Error
+}
+
 func (r *knowledgeRepository) AminusB(
 	ctx context.Context,
 	Atenant uint64, A string,
