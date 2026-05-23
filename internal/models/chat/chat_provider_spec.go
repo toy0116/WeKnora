@@ -75,6 +75,16 @@ var chatProviderSpecs = []ProviderSpec{
 	// legacy-session compatibility is handled by sanitizeMimoMessages
 	// (called from BuildChatCompletionRequest). See chat_provider_spec.go
 	// "MiMo compatibility helpers" section below for context.
+	// MiniMax (M2.x family) · force reasoning_split=true so thinking
+	// flows through the standard reasoning_content field instead of
+	// being embedded in content as <think>...</think> tags. WeKnora's
+	// existing reasoning_content parser then displays it separately
+	// (same path as MiMo / DeepSeek). Without this, the raw <think>
+	// blocks leak into the user-visible answer.
+	{
+		Provider:          provider.ProviderMiniMax,
+		RequestCustomizer: minimaxRequestCustomizer,
+	},
 }
 
 // findProviderSpec finds the matching spec for the given provider and model name.
@@ -110,6 +120,14 @@ type ThinkingConfig struct {
 type ThinkingChatCompletionRequest struct {
 	openai.ChatCompletionRequest
 	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+}
+
+// MiniMaxChatCompletionRequest MiniMax M2.x 系列的自定义请求结构体
+// reasoning_split=true 让 thinking 输出到独立的 reasoning_content 字段，
+// 避免默认行为下思考内容被 <think>...</think> 标签嵌入 content 流。
+type MiniMaxChatCompletionRequest struct {
+	openai.ChatCompletionRequest
+	ReasoningSplit bool `json:"reasoning_split"`
 }
 
 // --- Customizer functions ---
@@ -232,6 +250,26 @@ func genericRequestCustomizer(
 		"enable_thinking": thinking,
 	}
 	return req, true
+}
+
+// minimaxRequestCustomizer 自定义 MiniMax 请求
+// MiniMax M2.x 系列默认会进行思考，但若不显式开启 reasoning_split，思考内容会以
+// <think>...</think> 标签嵌入到 content 中（streaming chunks 也是这样），导致用户在
+// WeKnora UI 上看到的回答前半段全是模型内心独白。
+// 我们对 MiniMax-M* 前缀的模型一律开启 reasoning_split=true，让思考走标准的
+// reasoning_content 字段，与 MiMo / DeepSeek 行为一致 · WeKnora 的 ChatStream /
+// processRawHTTPStream 自带 reasoning_content 解析逻辑，前端能将它单独折叠展示。
+// 对非 M 系列（如 MiniMax-Text-01 等历史模型）跳过，避免触发 400。
+func minimaxRequestCustomizer(
+	req *openai.ChatCompletionRequest, _ *ChatOptions, _ bool,
+) (any, bool) {
+	if !strings.HasPrefix(req.Model, "MiniMax-M") {
+		return nil, false
+	}
+	return MiniMaxChatCompletionRequest{
+		ChatCompletionRequest: *req,
+		ReasoningSplit:        true,
+	}, true
 }
 
 // volcengineRequestCustomizer 自定义火山引擎请求
