@@ -289,7 +289,10 @@ func (a *CustomAgent) EnsureDefaults() {
 		a.Config.WebSearchMaxResults = 5
 	}
 	if a.Config.HistoryTurns == 0 {
-		a.Config.HistoryTurns = 5
+		// 2 轮 = 上一对 user/assistant + 上上对 · 够"继续展开第3点"类追问 ·
+		// 又能避开跨话题污染（5+ 轮在 IM session 横跨多天时容易把无关话题串进来）
+		// 改自上游默认 5 · 见 2026-05-25 全局策略调整
+		a.Config.HistoryTurns = 2
 	}
 	// Retrieval strategy defaults
 	if a.Config.EmbeddingTopK == 0 {
