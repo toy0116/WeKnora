@@ -3003,13 +3003,22 @@ func (s *Service) sendSummaryNotification(
 	}
 
 	typeName := fileTypeName(fileName)
+	// Image uploads get an extra prompt-hint nudging the user to ask an
+	// identification question. VLM caption is faithful description ("接口
+	// 在哪、什么形状") but rarely names the product — for that the agent
+	// has to cross-reference the bound product KB, which only happens when
+	// the user actually asks. So tell them.
+	imgHint := ""
+	if isImageExt(fileExtension(fileName)) {
+		imgHint = "\n\n💡 想知道这是哪款产品 / 图里说了啥关键信息？回复一句 \"识别一下\" 或 \"这是什么产品\" 即可。"
+	}
 	var situation, fallback string
 	if summary != "" && summary != fileName {
-		situation = fmt.Sprintf("用户之前上传的%s已解析完成。以下是文件的完整摘要内容：\n%s\n\n请生成一条通知消息，包含：1) 告知文件已解析完成；2) 用 Markdown 格式（标题、列表、加粗等）结构化展示上述摘要内容，不要删减或概括；3) 提示用户可以针对该文件提问。", typeName, summary)
-		fallback = fmt.Sprintf("📄 %s已解析完成。\n\n**摘要：**\n\n%s\n\n---\n可以针对该文件进行提问。", typeName, summary)
+		situation = fmt.Sprintf("用户之前上传的%s已解析完成。以下是文件的完整摘要内容：\n%s\n\n请生成一条通知消息，包含：1) 告知文件已解析完成；2) 用 Markdown 格式（标题、列表、加粗等）结构化展示上述摘要内容，不要删减或概括；3) 提示用户可以针对该文件提问%s", typeName, summary, func() string { if imgHint != "" { return "（特别是图片型文件，可以请用户问产品识别）" }; return "" }())
+		fallback = fmt.Sprintf("📄 %s已解析完成。\n\n**摘要：**\n\n%s\n\n---\n可以针对该文件进行提问。%s", typeName, summary, imgHint)
 	} else {
 		situation = fmt.Sprintf("用户之前上传的%s已解析完成，现在可以开始针对该文件进行提问了。", typeName)
-		fallback = fmt.Sprintf("📄 %s已解析完成，可以开始提问了！", typeName)
+		fallback = fmt.Sprintf("📄 %s已解析完成，可以开始提问了！%s", typeName, imgHint)
 	}
 
 	if err := s.sendSmartReply(ctx, adapter, msg, channel, situation, fallback); err != nil {
@@ -3024,6 +3033,18 @@ func fileExtension(filename string) string {
 		return ""
 	}
 	return strings.ToLower(parts[len(parts)-1])
+}
+
+// isImageExt reports whether the extension is an image format that the
+// VLM caption pipeline handles. Used to decide whether sendSummaryNotification
+// should append a "ask for product identification" hint — VLM gives faithful
+// description but product-name reverse-lookup needs an explicit agent query.
+func isImageExt(ext string) bool {
+	switch ext {
+	case "jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp":
+		return true
+	}
+	return false
 }
 
 // imPlatformToChannel maps an IM platform identifier to a Knowledge.Channel constant.
