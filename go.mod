@@ -332,3 +332,8 @@ require (
 )
 
 replace go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc => go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.59.0
+
+// LocalHub vendor patch (TY review 2026-05-28) · skip-and-log undecodable task messages
+// 上游 asynq v0.26.0 在 ListLeaseExpired / readAggregationSet 里一条坏 message 整批 abort · worker 卡死
+// 替换为本地 ./internal/vendor/asynq · patch 见 rdb.go:1346 / rdb.go:1196
+replace github.com/hibiken/asynq => ./internal/vendor/asynq
