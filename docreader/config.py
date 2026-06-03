@@ -51,6 +51,7 @@ class DocReaderConfig:
     grpc_max_workers: int
     grpc_max_file_size_mb: int
     grpc_port: int
+    grpc_host: str  # bind address · default 127.0.0.1 (loopback only)
 
     # Parser
     docx_max_pages: int
@@ -77,6 +78,10 @@ def load_config() -> DocReaderConfig:
         * 1024
     )
     grpc_port = _get_int(["DOCREADER_GRPC_PORT", "PORT"], 50051)
+    # bind host · default loopback to avoid LAN exposure.
+    # Set DOCREADER_GRPC_HOST=0.0.0.0 explicitly if you need cross-container
+    # access (e.g. running docreader in one Docker / Go backend on host).
+    grpc_host = _get_str(["DOCREADER_GRPC_HOST"], "127.0.0.1")
     docx_max_pages = _get_int(["DOCREADER_DOCX_MAX_PAGES"], 0)
     markitdown_max_workers = _get_int(["DOCREADER_MARKITDOWN_MAX_WORKERS"], 1)
     pdf_render_max_workers = _get_int(["DOCREADER_PDF_RENDER_MAX_WORKERS"], 1)
@@ -98,6 +103,7 @@ def load_config() -> DocReaderConfig:
         grpc_max_workers=grpc_max_workers,
         grpc_max_file_size_mb=grpc_max_file_size_mb,
         grpc_port=grpc_port,
+        grpc_host=grpc_host,
         docx_max_pages=docx_max_pages,
         markitdown_max_workers=markitdown_max_workers,
         pdf_render_max_workers=pdf_render_max_workers,
@@ -118,6 +124,7 @@ def dump_config(mask_secrets: bool = True) -> Dict[str, Any]:
         "DOCREADER_GRPC_MAX_WORKERS": cfg.grpc_max_workers,
         "DOCREADER_GRPC_MAX_FILE_SIZE_MB": cfg.grpc_max_file_size_mb,
         "DOCREADER_GRPC_PORT": cfg.grpc_port,
+        "DOCREADER_GRPC_HOST": cfg.grpc_host,
         "DOCREADER_DOCX_MAX_PAGES": cfg.docx_max_pages,
         "DOCREADER_MARKITDOWN_MAX_WORKERS": cfg.markitdown_max_workers,
         "DOCREADER_PDF_RENDER_MAX_WORKERS": cfg.pdf_render_max_workers,

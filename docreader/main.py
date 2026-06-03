@@ -197,10 +197,14 @@ def main():
     health_servicer = HealthServicer()
     health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
 
-    server.add_insecure_port(f"[::]:{CONFIG.grpc_port}")
+    # Bind to configured host:port. Default in config.py is 127.0.0.1 (loopback
+    # only) to avoid LAN exposure of the unauthenticated gRPC server. Override
+    # DOCREADER_GRPC_HOST=0.0.0.0 if cross-container access is genuinely needed.
+    bind_target = f"{CONFIG.grpc_host}:{CONFIG.grpc_port}"
+    server.add_insecure_port(bind_target)
     server.start()
 
-    logger.info("Server started on port %d", CONFIG.grpc_port)
+    logger.info("Server started on %s", bind_target)
     logger.info("Server is ready to accept connections")
 
     try:
