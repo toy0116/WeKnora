@@ -91,7 +91,8 @@ func (v *RemoteAPIVLM) Predict(ctx context.Context, imgBytesList [][]byte, promp
 				Type: openai.ChatMessagePartTypeImageURL,
 				ImageURL: &openai.ChatMessageImageURL{
 					URL:    dataURI,
-					Detail: openai.ImageURLDetailAuto,
+					// MiniMax 视觉接口拒绝 detail:"auto"(400 invalid image detail),用 high
+					Detail: openai.ImageURLDetailHigh,
 				},
 			})
 		}

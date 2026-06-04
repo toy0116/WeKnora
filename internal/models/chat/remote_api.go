@@ -216,7 +216,8 @@ func (c *RemoteAPIChat) ConvertMessages(messages []Message) []openai.ChatComplet
 					Type: openai.ChatMessagePartTypeImageURL,
 					ImageURL: &openai.ChatMessageImageURL{
 						URL:    resolved,
-						Detail: openai.ImageURLDetailAuto,
+						// MiniMax 视觉接口拒绝 detail:"auto"(400 invalid image detail),用 high
+						Detail: openai.ImageURLDetailHigh,
 					},
 				})
 			}
