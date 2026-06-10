@@ -89,9 +89,10 @@ func NewAsynqServer() *asynq.Server {
 		opt,
 		asynq.Config{
 			Queues: map[string]int{
-				"critical": 6, // Highest priority queue
-				"default":  3, // Default priority queue
-				"low":      1, // Lowest priority queue
+				"critical":  6, // Highest priority queue
+				"default":   3, // Default priority queue
+				"doc_large": 2, // Large-file document processing · 大文件解析专用 · 见 knowledge_process.go:629
+				"low":       1, // Lowest priority queue
 			},
 			RetryDelayFunc: asynqRetryDelayFunc,
 		},
